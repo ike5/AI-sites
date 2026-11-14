@@ -399,6 +399,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             self.store.x("DELETE FROM records WHERE collection=?", (name,))
             self.store.x("DELETE FROM nodes WHERE tree=?", (name,))
             self.store.x("DELETE FROM schedules WHERE collection=?", (name,))
+            self.store.x("DELETE FROM messages WHERE form=?", (name,))  # so a later namesake starts empty
             self.store.x("DELETE FROM timers WHERE substr(path, 1, ?) = ?", (len(prefix), prefix))
             self.store.x("DELETE FROM structures WHERE name=?", (name,))
             self._prune_grants(name)
