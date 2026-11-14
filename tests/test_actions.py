@@ -251,3 +251,20 @@ def test_forms_are_not_record_collections(site):
     site.alter("contact", access="public")
     entry = next(s for s in site.manifest()["structures"] if s["name"] == "contact")
     assert entry["type"] == "form" and entry["href"] == "/forms/contact"
+
+
+def test_a_feature_can_offer_staff_operations_to_roles(site):
+    ops.register(ops.Op("peek", "Look at a structure's count.", lambda site, target: site.describe(target)["count"],
+                        {"target": {"type": "string"}}, ("target",), mutates=False, grantable=True))
+    try:
+        site.define("things")
+        site.set_role("lookers", [{"target": "things", "ops": ["peek"]}])
+        looker = ops.Principal("role", site.issue_key("lookers")["id"], "lookers")
+        assert ops.run(site, looker, "peek", {"target": "things"}) == 0
+        with pytest.raises(SiteError) as e:
+            ops.run(site, looker, "add", {"target": "things", "data": {}})
+        assert e.value.code == "forbidden", "being granted one operation grants nothing else"
+        with pytest.raises(SiteError):
+            ops.run(site, ops.ANONYMOUS, "peek", {"target": "things"})
+    finally:
+        ops.OPS.pop("peek")

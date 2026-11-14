@@ -59,6 +59,8 @@ class Op:
     visitor: bool = False
     # The structure setting that switches a visitor operation on, e.g. "booking".
     setting: Optional[str] = None
+    # A staff operation a role may be granted on a target, beyond the record operations in ROLE_OPS.
+    grantable: bool = False
 
     def schema(self) -> dict:
         return {"type": "object", "properties": self.params, "required": list(self.required),
@@ -197,7 +199,7 @@ class Preview(Exception):
 
 def grantable() -> tuple:
     """Every operation a role can be granted: staff editing, `read` of invite-only data, visitor actions."""
-    return ROLE_OPS + ("describe", "read") + tuple(n for n, o in OPS.items() if o.visitor)
+    return ROLE_OPS + ("describe", "read") + tuple(n for n, o in OPS.items() if o.visitor or o.grantable)
 
 
 def run(site: Site, principal: Principal, op: str, args: Optional[dict] = None, dry_run: bool = False) -> Any:
@@ -288,7 +290,7 @@ def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
     grants = site.role_grants(principal.role, principal.id)
     who = f"Role '{principal.role}'"
     target = args.get("target")
-    if op != "describe" and op not in ROLE_OPS and not OPS[op].visitor:
+    if op != "describe" and op not in ROLE_OPS and not (OPS[op].visitor or OPS[op].grantable):
         raise _forbidden(f"{who} cannot use `{op}`; only the site owner can.",
                          f"This role may: {_summary(grants)}.")
     if target is None:
@@ -300,8 +302,8 @@ def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
     granted = on if op == "describe" else [g for g in on if op in g["ops"]]
     if not granted:
         raise _forbidden(f"{who} may not `{op}` in '{target}'.", f"In '{target}' it may: {_summary(on)}.")
-    if OPS[op].visitor:
-        return set()  # field limits and hidden fields concern staff editing, not visitor actions
+    if OPS[op].visitor or OPS[op].grantable:
+        return set()  # field limits and hidden fields concern record editing, not these operations
     if op != "describe" and all("fields" in g for g in granted):
         allowed = sorted({f for g in granted for f in g["fields"]})
         if op in ("remove", "move"):
