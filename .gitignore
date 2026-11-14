@@ -10,3 +10,6 @@ dist/
 sites/
 site.db*
 site.key
+
+# Isolated working copies used by parallel agents.
+.claude/worktrees/
