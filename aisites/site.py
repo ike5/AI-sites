@@ -1136,7 +1136,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             "aisites": VERSION, **{k: v for k, v in config.items() if v},
             "first_published": self.first_published(), "as_of": self.now_z(),
             "public_key": self.public_key, "structures": structures,
-            "links": {"actions": f"{prefix}/actions", "changes": f"{prefix}/changes", "history": f"{prefix}/history",
+            "links": {"actions": f"{prefix}/actions", "changes": f"{prefix}/changes", "stream": f"{prefix}/changes/stream", "history": f"{prefix}/history",
                       "head": f"{prefix}/history/head",
                       "overview": f"{prefix}/llms.txt", "openapi": f"{prefix}/openapi.json"},
             "reading": [
