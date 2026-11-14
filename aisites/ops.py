@@ -92,7 +92,7 @@ register(
     Op("define", "Create a structure: a collection (optionally of a built-in kind) or a tree.",
        lambda site, target, **kw: site.define(target, **kw),
        {"target": _TARGET,
-        "type": {"type": "string", "enum": ["collection", "tree"]},
+        "type": {"type": "string", "enum": ["collection", "tree", "form"]},
         "kind": {"type": "string", "description": "A built-in kind such as Product, Hours or Notice; "
                                                   "`describe` lists them."},
         "key": {"type": "string", "description": "Name of the key field; defaults to the kind's, or 'id'."},
@@ -100,13 +100,15 @@ register(
         "description": _S,
         "fields": {"type": "array", "description": "Extra fields, each an object or shorthand "
                                                    "'name[!]:type[[]][:policy]', e.g. 'stock:integer:live'."},
-        "refs": {"type": "object", "description": "Turn fields into choices: {field: structure name}."}},
+        "refs": {"type": "object", "description": "Turn fields into choices: {field: structure name}."},
+        "settings": {"type": "object", "description": "Feature settings by name, e.g. {\"booking\": {...}}. null removes one."}},
        ("target",)),
     Op("alter", "Change a structure: add or remove fields, change access or description, set references.",
        lambda site, target, **kw: site.alter(target, **kw),
        {"target": _TARGET, "add": _A, "remove": _A,
         "access": {"type": "string", "enum": ["public", "invite", "private"]},
-        "description": _S, "refs": _O},
+        "description": _S, "refs": _O,
+        "settings": {"type": "object", "description": "Feature settings by name, e.g. {\"booking\": {...}}. null removes one."}},
        ("target",)),
     Op("drop", "Delete a structure and everything in it.",
        lambda site, target: site.drop(target), {"target": _TARGET}, ("target",)),
@@ -168,8 +170,8 @@ register(
 
 for _name, _positional, _pairs, _flags in [
     ("describe", ("target?",), None, {}), ("configure", (), "*", {}),
-    ("define", ("target",), None, {"fields": "--field", "refs": "--ref"}),
-    ("alter", ("target",), None, {"refs": "--ref"}), ("drop", ("target",), None, {}),
+    ("define", ("target",), None, {"fields": "--field", "refs": "--ref", "settings": "--setting"}),
+    ("alter", ("target",), None, {"refs": "--ref", "settings": "--setting"}), ("drop", ("target",), None, {}),
     ("add", ("target",), "data", {}), ("get", ("target", "key"), None, {}), ("list", ("target",), "where", {}),
     ("change", ("target", "key"), "set", {}), ("remove", ("target", "key"), None, {}),
     ("move", ("target", "key"), None, {}), ("schedule", ("target", "key"), "set", {}),
@@ -186,11 +188,24 @@ def describe_ops() -> list:
             for op in OPS.values()]
 
 
-def run(site: Site, principal: Principal, op: str, args: Optional[dict] = None) -> Any:
+class Preview(Exception):
+    """Raised inside a transaction to undo it and hand back what the operation would have returned."""
+
+    def __init__(self, result: Any):
+        self.result = result
+
+
+def grantable() -> tuple:
+    """Every operation a role can be granted: staff editing, `read` of invite-only data, visitor actions."""
+    return ROLE_OPS + ("describe", "read") + tuple(n for n, o in OPS.items() if o.visitor)
+
+
+def run(site: Site, principal: Principal, op: str, args: Optional[dict] = None, dry_run: bool = False) -> Any:
     """Run one operation for a caller. Every door ends up here.
 
     Each call to an operation that changes the site leaves one row in the private audit trail, whether
-    it was allowed or refused.
+    it was allowed or refused. With `dry_run`, a changing operation is run and rolled back, leaving no
+    trace, and the answer is wrapped as {"dry_run": true, "result": ...}.
     """
     spec = OPS.get(op)
     if spec is None:
@@ -198,6 +213,12 @@ def run(site: Site, principal: Principal, op: str, args: Optional[dict] = None) 
                         "Operations: " + ", ".join(OPS) + ".", status=404)
     if not spec.mutates:
         return _run(site, principal, spec, args)
+    if dry_run:
+        try:
+            with site.store.tx():
+                raise Preview(_run(site, principal, spec, args))
+        except Preview as p:
+            return {"dry_run": True, "result": p.result}
     try:
         with site.store.tx():
             result = _run(site, principal, spec, args)
@@ -211,7 +232,7 @@ def run(site: Site, principal: Principal, op: str, args: Optional[dict] = None) 
 
 def _run(site: Site, principal: Principal, spec: Op, args: Optional[dict]) -> Any:
     op = spec.name
-    if principal.kind not in ("owner", "role"):
+    if principal.kind not in ("owner", "role") and not (principal.kind == "anonymous" and spec.visitor):
         raise SiteError("forbidden", "This operation needs the site owner's key.",
                         "Send it as: Authorization: Bearer <owner key>", status=403)
     args = {k: v for k, v in (args or {}).items() if v is not None or k in ("parent",)}
@@ -227,6 +248,18 @@ def _run(site: Site, principal: Principal, spec: Op, args: Optional[dict]) -> An
         want = _TYPES.get(spec.params[name].get("type", ""))
         if want and value is not None and (not isinstance(value, want) or (want is int and isinstance(value, bool))):
             raise SiteError("invalid", f"`{name}` must be {spec.params[name]['type']}.")
+    if spec.visitor:
+        # Visitor operations act for the caller, so they are told who is calling.
+        if principal.kind == "anonymous":
+            _check_open(site, spec, args)
+        elif principal.kind == "role":
+            _check_role(site, principal, op, args)
+        return spec.fn(site, principal, **args)
+    if op in ROLE_OPS:
+        target = site._defs().get(args.get("target"))
+        if target is not None and target.type == "form":
+            raise SiteError("wrong_structure", f"'{target.name}' is a form; its messages are not ordinary records.",
+                            "Use `inbox`, `read_message` and `reply`.")
     if principal.kind != "role":
         return spec.fn(site, **args)
     hidden = _check_role(site, principal, op, args)
@@ -255,7 +288,7 @@ def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
     grants = site.role_grants(principal.role, principal.id)
     who = f"Role '{principal.role}'"
     target = args.get("target")
-    if op != "describe" and op not in ROLE_OPS:
+    if op != "describe" and op not in ROLE_OPS and not OPS[op].visitor:
         raise _forbidden(f"{who} cannot use `{op}`; only the site owner can.",
                          f"This role may: {_summary(grants)}.")
     if target is None:
@@ -267,6 +300,8 @@ def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
     granted = on if op == "describe" else [g for g in on if op in g["ops"]]
     if not granted:
         raise _forbidden(f"{who} may not `{op}` in '{target}'.", f"In '{target}' it may: {_summary(on)}.")
+    if OPS[op].visitor:
+        return set()  # field limits and hidden fields concern staff editing, not visitor actions
     if op != "describe" and all("fields" in g for g in granted):
         allowed = sorted({f for g in granted for f in g["fields"]})
         if op in ("remove", "move"):
@@ -321,6 +356,15 @@ def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
                 raise SiteError({"filter by": "bad_filter", "sort by": "bad_sort", "select": "bad_fields"}[verb],
                                 f"'{name}' is not a field of '{target}'.", visible)
     return hidden
+
+
+def _check_open(site: Site, spec: Op, args: dict) -> None:
+    """A caller without a key may use a visitor operation only where the owner has opened it."""
+    sdef = site._defs().get(args.get("target"))
+    block = sdef.settings.get(spec.setting) if sdef is not None and sdef.access != "private" else None
+    if not block or not block.get("open"):
+        raise SiteError("needs_key", f"`{spec.name}` on '{args.get('target')}' needs a key from the site owner.",
+                        "Send it as: Authorization: Bearer <key>", status=401)
 
 
 def _hide(op: str, result: Any, hidden: set) -> Any:

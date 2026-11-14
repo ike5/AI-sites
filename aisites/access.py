@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from . import schema
 from .errors import SiteError, not_found
-from .ops import _A, _I, _S, OPS, ROLE_OPS, Op, Principal, register
+from .ops import _I, _S, OPS, Op, Principal, grantable, register
 
 
 def _hash_key(token: str) -> str:
@@ -37,7 +37,7 @@ class AccessMixin:
         return Principal("role", row["id"], row["role"]) if row else None
 
     def _grant_choices(self) -> str:
-        return ", ".join(ROLE_OPS + ("describe",))
+        return ", ".join(grantable())
 
     def _check_grants(self, grants: Any) -> list:
         if not isinstance(grants, list) or not grants:
@@ -62,7 +62,7 @@ class AccessMixin:
             if not isinstance(ops_, list) or not ops_ or not all(isinstance(o, str) for o in ops_):
                 raise SiteError("invalid", f"{where}: `ops` must be a non-empty list of operation names.",
                                 "Operations a role may be given: " + self._grant_choices() + ".")
-            bad = [o for o in ops_ if o not in ROLE_OPS + ("describe",)]
+            bad = [o for o in ops_ if o not in grantable()]
             if bad:
                 raise SiteError("invalid", f"{where}: {', '.join(bad)} cannot be given to a role.",
                                 "Operations a role may be given: " + self._grant_choices() +

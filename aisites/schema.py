@@ -84,13 +84,15 @@ class StructureDef(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    type: Literal["collection", "tree"] = "collection"
+    type: Literal["collection", "tree", "form"] = "collection"
     kind: Optional[str] = None
     semantic: Optional[str] = None
     key: str = "id"
     access: Literal["public", "invite", "private"] = "public"
     description: str = ""
     fields: List[FieldSpec] = []
+    # Feature settings such as "booking", each checked by the feature that owns it (see hooks.SETTINGS).
+    settings: dict = {}
 
     def field(self, name: str) -> Optional[FieldSpec]:
         for f in self.fields:
@@ -112,7 +114,10 @@ class StructureDef(BaseModel):
         return self.names("live", "capacity")
 
     def dump(self) -> dict:
-        return self.model_dump(mode="json", exclude_none=True, exclude_defaults=False)
+        out = self.model_dump(mode="json", exclude_none=True, exclude_defaults=False)
+        if not out["settings"]:
+            del out["settings"]
+        return out
 
 
 # ---------------------------------------------------------------- validation

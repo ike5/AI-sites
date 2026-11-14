@@ -27,8 +27,12 @@ from .errors import SiteError, not_found
 from .history import History
 from .schema import FieldSpec, StructureDef
 from .store import Store
+from . import hooks, ops as ops_mod
 from .access import AccessMixin, _hash_key
+from .actions import ActionsMixin
+from .bookings import BookingsMixin
 from .checkpoints import CheckpointMixin
+from .forms import FormsMixin
 from .redaction import RedactionMixin
 
 VERSION = "0.1"
@@ -37,7 +41,7 @@ FILTER_OPS = ("eq", "ne", "gt", "gte", "lt", "lte")
 CONFIG_FIELDS = ("name", "description", "timezone", "language", "currency")
 
 
-class Site(RedactionMixin, CheckpointMixin, AccessMixin):
+class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsMixin, FormsMixin):
     def __init__(self, directory: Any, clock: Optional[Callable[[], datetime]] = None,
                  anchors: Optional[list] = None):
         self.dir = Path(directory)
@@ -49,6 +53,9 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
         self.clock = clock or (lambda: datetime.now(timeview.UTC))
         self.history = History(self.store, self.now_z)
         self._viewer = threading.local()
+        self._actions: dict = {}          # custom actions registered with @site.action
+        self._in_flight: dict = {}        # changing visitor calls in progress, per caller
+        self._flight_lock = threading.Lock()
         self._anchors = list(anchors or [])
 
     # ------------------------------------------------------------ creation and config
@@ -146,6 +153,20 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
         finally:
             self._viewer.limit = previous
 
+    def set_reader(self, principal: Any) -> None:
+        """Note who is reading on this thread, so invite-only data can be shown to a key that may read it."""
+        self._viewer.reader = principal
+
+    def _reader_may(self, target: str, op: str = "read") -> bool:
+        reader = getattr(self._viewer, "reader", None)
+        if reader is None or reader.kind != "role":
+            return False
+        return any(g["target"] in (target, "*") and op in g["ops"]
+                   for g in self.role_grants(reader.role, reader.id))
+
+    def _reader_keyed(self) -> bool:
+        return getattr(getattr(self._viewer, "reader", None), "kind", "") == "role"
+
     def _hidden_from(self, sdef: StructureDef, owner: bool = True) -> frozenset:
         """Fields the current reader may not see: private ones for visitors, a role's hidden set for staff."""
         if not owner:
@@ -171,7 +192,11 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
             return
         with self.store.tx():
             for t in self.store.q("SELECT * FROM timers WHERE at <= ? ORDER BY at, id", (now,)):
-                self._change(t["at"], t["path"], t["what"])
+                hook = hooks.TIMERS.get(t["ref"].split(":", 1)[0])
+                if hook:  # a feature acts on its own timers, e.g. releasing an expired hold
+                    hook(self, t)
+                else:
+                    self._change(t["at"], t["path"], t["what"])
             self.store.x("DELETE FROM timers WHERE at <= ?", (now,))
 
     def etag(self, owner: bool = False, extra: str = "") -> str:
@@ -182,7 +207,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
         """
         self.tick()
         last = self.store.one("SELECT COALESCE(MAX(id), 0) AS m FROM changes")["m"]
-        if owner:
+        if owner or self._reader_keyed():
             return f'W/"{self.store.meta("rev", 0)}.{last}.o{extra}"'
         return f'W/"p{self.history.head()[0]}.{last}{extra}"'
 
@@ -245,11 +270,11 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
 
     def define(self, name: str, type: str = "collection", kind: Optional[str] = None, key: Optional[str] = None,
                access: str = "public", description: str = "", fields: Optional[list] = None,
-               refs: Optional[dict] = None) -> dict:
+               refs: Optional[dict] = None, settings: Optional[dict] = None) -> dict:
         """Create a structure: a collection (optionally of a built-in kind) or a tree."""
         schema.check_name(name, "structure")
-        if type not in ("collection", "tree"):
-            raise SiteError("invalid", f"'{type}' is not a structure type.", "Use 'collection' or 'tree'.")
+        if type not in ("collection", "tree", "form"):
+            raise SiteError("invalid", f"'{type}' is not a structure type.", "Use 'collection', 'tree' or 'form'.")
         if access not in schema.ACCESS:
             raise SiteError("invalid", f"'{access}' is not an access level.", "Use public, invite or private.")
         with self.store.tx():
@@ -262,6 +287,12 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
             if type == "tree":
                 if kind or fields:
                     raise SiteError("invalid", "A tree has no kind or fields; its nodes have an id and a label.")
+            elif type == "form":
+                # A form's fields describe what a visitor may send; it has no records and so no key field.
+                if kind:
+                    raise SiteError("invalid", "A form has no kind.")
+                specs = [schema.parse_field(spec) for spec in fields or []]
+                self._apply_refs(specs, refs, defs, name)
             else:
                 if kind:
                     if kind not in kinds.KINDS:
@@ -284,12 +315,25 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
                 self._apply_refs(specs, refs, defs, name)
             sdef = StructureDef(name=name, type=type, kind=kind, semantic=semantic, key=key or "id",
                                 access=access, description=description, fields=specs)
+            self._apply_settings(sdef, settings)
             self._save_def(sdef)
         return self.describe(name)
 
+    def _apply_settings(self, sdef: StructureDef, settings: Optional[dict]) -> None:
+        """Set or remove feature settings; each is checked by the feature that owns it."""
+        for name, value in (settings or {}).items():
+            if value is None:
+                sdef.settings.pop(name, None)
+                continue
+            check = hooks.SETTINGS.get(name)
+            if check is None:
+                raise SiteError("invalid", f"'{name}' is not a setting.",
+                                "Settings: " + (", ".join(hooks.SETTINGS) or "none") + ".")
+            sdef.settings[name] = check(self, sdef, value)
+
     def alter(self, name: str, add: Optional[list] = None, remove: Optional[list] = None,
               access: Optional[str] = None, description: Optional[str] = None,
-              refs: Optional[dict] = None) -> dict:
+              refs: Optional[dict] = None, settings: Optional[dict] = None) -> dict:
         """Change a structure: add or remove fields, change access or description, set references."""
         with self.store.tx():
             sdef = self._sdef(name)
@@ -325,8 +369,9 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
                 sdef.access = access
             if description is not None:
                 sdef.description = description
-            if sdef.type == "collection":
+            if sdef.type != "tree":
                 self._apply_refs(sdef.fields, refs, self._defs(), name)
+            self._apply_settings(sdef, settings)
             self._save_def(sdef, before)
         return self.describe(name)
 
@@ -371,6 +416,12 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
                 "kinds": kinds.describe()}
 
     # ------------------------------------------------------------ record helpers
+
+    @staticmethod
+    def _no_form(sdef: StructureDef) -> None:
+        if sdef.type == "form":
+            raise SiteError("wrong_structure", f"'{sdef.name}' is a form; its messages are not ordinary records.",
+                            "Use `inbox`, `read_message` and `reply`.")
 
     def _row(self, name: str, key: str):
         return self.store.one("SELECT * FROM records WHERE collection=? AND key=?", (name, str(key)))
@@ -533,6 +584,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
     def add(self, name: str, data: dict, parent: Optional[str] = None, position: Optional[int] = None) -> dict:
         """Add a record to a collection, or a node to a tree. Fails if the key already exists."""
         sdef = self._sdef(name)
+        self._no_form(sdef)
         if sdef.type == "tree":
             return self._node_add(sdef, data, parent, position)
         if not isinstance(data, dict):
@@ -559,6 +611,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
     def get(self, name: str, key: str) -> dict:
         """One record with everything the owner may see, or one tree node with its subtree."""
         sdef = self._sdef(name)
+        self._no_form(sdef)
         if sdef.type == "tree":
             return self._node_view(sdef, str(key))
         row = self._need_row(sdef, key)
@@ -568,6 +621,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
              cursor: Optional[str] = None, fields: Optional[list] = None, owner: bool = True) -> dict:
         """Records matching filters such as {"price.lt": 50, "region": "MX"}, sorted and paged."""
         sdef = self._sdef(name)
+        self._no_form(sdef)
         if sdef.type == "tree":
             return self.read_tree(name)
         now_dt, now = self.now(), self.now_z()
@@ -641,6 +695,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
     def change(self, name: str, key: str, set: dict) -> dict:
         """Change fields of an existing record or tree node. A null value clears a field."""
         sdef = self._sdef(name)
+        self._no_form(sdef)
         if sdef.type == "tree":
             return self._node_change(sdef, str(key), set)
         if not isinstance(set, dict) or not set:
@@ -679,6 +734,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
     def remove(self, name: str, key: str, recursive: bool = False) -> dict:
         """Remove a record, or a tree node. Fails if something still refers to it."""
         sdef = self._sdef(name)
+        self._no_form(sdef)
         if sdef.type == "tree":
             return self._node_remove(sdef, str(key), recursive)
         with self.store.tx():
@@ -991,7 +1047,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
         sdef = StructureDef(**json.loads(row["def"])) if row else None
         if sdef is None or (sdef.access == "private" and not owner):
             raise not_found(f"'{name}'", "The manifest at /.well-known/aisite.json lists what this site offers.")
-        if sdef.access == "invite" and not owner:
+        if sdef.access == "invite" and not owner and not self._reader_may(name):
             raise SiteError("needs_key", f"'{name}' is invite-only.",
                             "Send the key you were given as: Authorization: Bearer <key>", status=401)
         return sdef
@@ -1059,7 +1115,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
         for d in self._defs().values():
             if d.access == "private" and not owner:
                 continue
-            base = f"{prefix}/{'trees' if d.type == 'tree' else 'collections'}/{d.name}"
+            base = f"{prefix}/{ {'tree': 'trees', 'form': 'forms'}.get(d.type, 'collections') }/{d.name}"
             item = {"name": d.name, "type": d.type, "access": d.access, "href": base}
             if d.kind:
                 item["kind"] = d.kind
@@ -1069,15 +1125,18 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin):
                 item["description"] = d.description
             if d.type == "collection":
                 item["schema"] = base + "/schema"
-            if d.access == "invite" and not owner:
+            if d.access == "invite" and not owner and not self._reader_may(d.name):
                 item["note"] = "Needs a key from the site owner."
+            actions = [op.name for op in ops_mod.OPS.values() if op.visitor and op.setting in d.settings]
+            if actions:
+                item["actions"] = actions
             has_hours = has_hours or (d.kind == "Hours" and (owner or d.public))
             structures.append(item)
         out = {
             "aisites": VERSION, **{k: v for k, v in config.items() if v},
             "first_published": self.first_published(), "as_of": self.now_z(),
             "public_key": self.public_key, "structures": structures,
-            "links": {"changes": f"{prefix}/changes", "history": f"{prefix}/history",
+            "links": {"actions": f"{prefix}/actions", "changes": f"{prefix}/changes", "history": f"{prefix}/history",
                       "head": f"{prefix}/history/head",
                       "overview": f"{prefix}/llms.txt", "openapi": f"{prefix}/openapi.json"},
             "reading": [

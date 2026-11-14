@@ -43,6 +43,7 @@ def create_app(site: Site) -> FastAPI:
     def is_owner(request: Request) -> bool:
         # A role key is valid here but reads like a visitor; roles act through the admin and MCP doors.
         found = principal(request)
+        site.set_reader(found)  # lets a key with `read` on an invite-only structure see it
         return found is not None and found.kind == "owner"
 
     def headers(request: Request, etag: str) -> dict:
@@ -63,6 +64,8 @@ def create_app(site: Site) -> FastAPI:
     @app.exception_handler(SiteError)
     async def site_error(request: Request, e: SiteError):
         head = {"WWW-Authenticate": "Bearer"} if e.status == 401 else {}
+        if getattr(e, "retry_after", None):
+            head["Retry-After"] = str(e.retry_after)
         return JSONResponse(e.as_dict(), status_code=e.status, headers=head)
 
     @app.exception_handler(HTTPException)
@@ -247,6 +250,14 @@ def create_app(site: Site) -> FastAPI:
     @app.post("/admin/{target}/{op}")
     async def admin_target(request: Request, target: str, op: str):
         return await admin(request, op, target)
+
+    # Feature modules add their own routes; `ctx` hands them the helpers above.
+    from types import SimpleNamespace
+    from . import actions, bookings, forms, stream
+    ctx = SimpleNamespace(prefix=prefix, token=token, principal=principal, is_owner=is_owner,
+                          headers=headers, reply=reply)
+    for feature in (stream, actions, bookings, forms):
+        feature.routes(app, site, ctx)
 
     from .mcp_door import McpHttp
     app.mount("/mcp", McpHttp(site))

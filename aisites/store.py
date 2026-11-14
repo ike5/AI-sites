@@ -52,6 +52,25 @@ CREATE TABLE IF NOT EXISTS keys (
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, who TEXT NOT NULL, role TEXT NOT NULL,
     op TEXT NOT NULL, target TEXT, key TEXT, detail TEXT NOT NULL DEFAULT '{}', ok INTEGER NOT NULL);
+
+-- Milestone 3: retry safety and quotas for visitor calls, bookings, and messages sent through forms.
+CREATE TABLE IF NOT EXISTS idempotency (
+    caller TEXT NOT NULL, scope TEXT NOT NULL, idem_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+    response TEXT NOT NULL, created TEXT NOT NULL, PRIMARY KEY (caller, scope, idem_key));
+CREATE TABLE IF NOT EXISTS usage (
+    caller TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (caller, day));
+CREATE TABLE IF NOT EXISTS bookings (
+    id TEXT PRIMARY KEY, collection TEXT NOT NULL, key TEXT NOT NULL, quantity INTEGER NOT NULL,
+    status TEXT NOT NULL, caller TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}', created TEXT NOT NULL,
+    expires TEXT, confirmed TEXT, released TEXT);
+CREATE INDEX IF NOT EXISTS bookings_by_record ON bookings (collection, key);
+CREATE INDEX IF NOT EXISTS bookings_by_caller ON bookings (caller, status);
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY, form TEXT NOT NULL, caller TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}',
+    text TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, created TEXT NOT NULL, read_at TEXT,
+    reply TEXT, replied_at TEXT);
+CREATE INDEX IF NOT EXISTS messages_by_form ON messages (form, created);
+CREATE INDEX IF NOT EXISTS messages_by_caller ON messages (caller, created);
 """
 
 
