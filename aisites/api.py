@@ -329,8 +329,21 @@ def openapi_doc(site: Site, owner: bool, prefix: str) -> dict:
                              "responses": {"200": {"description": "OK"}}}},
     }
     schemas = {}
+    if any(s.get("actions") or s["type"] == "form" for s in m["structures"]):
+        paths["/actions"] = {"get": {"summary": "What a visitor can do here, with each action's arguments",
+                                     "responses": {"200": {"description": "OK"}}}}
+    paths["/changes/stream"] = {"get": {"summary": "The change feed as server-sent events",
+                                        "parameters": [{"name": "since", "in": "query", "schema": {"type": "integer"}}],
+                                        "responses": {"200": {"description": "text/event-stream"}}}}
     for s in m["structures"]:
         name = s["name"]
+        if s["type"] == "form":
+            paths[f"/forms/{name}"] = {"get": {"summary": s.get("description") or f"How to send a message to {name}",
+                                               "responses": {"200": {"description": "OK"}}}}
+            continue
+        if "reserve" in s.get("actions", []):
+            paths[f"/bookable/{name}"] = {"get": {"summary": f"How to book in {name}",
+                                                  "responses": {"200": {"description": "OK"}}}}
         if s["type"] == "tree":
             paths[f"/trees/{name}"] = {"get": {
                 "summary": s.get("description") or f"Tree {name}",

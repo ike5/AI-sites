@@ -289,7 +289,8 @@ class BookingsMixin:
             self._timer(expires, f"bookings/{bid}", "hold expired", f"{SETTING}:{bid}")
             out = self._booking_view(self.store.one("SELECT * FROM bookings WHERE id=?", (bid,)))
             out["remaining"] = left - quantity
-            out["book"] = {"href": f"/actions/{target}/book", "before": expires, "details": details_schema(setting)}
+            # No link here: an operation does not know the prefix a site is served under. /actions has it.
+            out["book"] = {"action": "book", "before": expires, "details": details_schema(setting)}
             return out
 
     def book(self, target: str, booking: str, details: Optional[dict] = None,
