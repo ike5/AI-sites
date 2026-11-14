@@ -37,7 +37,8 @@ class FileAnchor:
             f.seek(0)
             line = sum(1 for _ in f) + 1
             f.write(json.dumps(checkpoint, sort_keys=True, ensure_ascii=False) + "\n")
-        return {"anchor": self.name, "path": str(self.path), "line": line}
+        # Proofs are served to everyone, so they carry the file's name, never where it sits on the server.
+        return {"anchor": self.name, "file": self.path.name, "line": line}
 
 
 def from_config(items: Any) -> list:

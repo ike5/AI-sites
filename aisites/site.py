@@ -1183,7 +1183,7 @@ class Site:
             try:
                 proof = anchor.anchor(signed)
             except Exception as e:  # one failing anchor must not cost the others their proofs
-                proof = {"error": str(e) or type(e).__name__}
+                proof = {"error": type(e).__name__}  # public, so no message: it may hold server paths
             if proof is not None:
                 proofs.append({"anchor": name, **proof})
         self.store.x("UPDATE checkpoints SET proofs=? WHERE seq=?", (json.dumps(proofs), body["seq"]))

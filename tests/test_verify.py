@@ -68,7 +68,7 @@ def test_checkpoint_stores_a_row_and_writes_to_a_file_anchor(made, clock, tmp_pa
     assert isinstance(site.anchors[0], Anchor)
 
     first = site.checkpoint()
-    assert first["proofs"] == [{"anchor": "file", "path": str(outside), "line": 1}]
+    assert first["proofs"] == [{"anchor": "file", "file": outside.name, "line": 1}]
     lines = outside.read_text().splitlines()
     assert json.loads(lines[0]) == {k: first[k] for k in ("checkpoint", "signature", "algorithm")}
 
@@ -102,7 +102,7 @@ def test_failing_anchor_does_not_lose_the_checkpoint(site):
 
     s = Site(site.dir, site.clock, anchors=[Broken(), Silent()])
     out = s.checkpoint()
-    assert out["proofs"] == [{"anchor": "broken", "error": "unreachable"}]
+    assert out["proofs"] == [{"anchor": "broken", "error": "RuntimeError"}]
     assert s.checkpoints()["checkpoints"][0]["proofs"] == out["proofs"]
 
 
@@ -115,7 +115,7 @@ def test_anchors_configured_without_python(site, tmp_path, clock):
 
     out = io.StringIO()
     assert main(["checkpoint", "-s", str(site.dir)], clock=clock, out=out) == 0
-    assert json.loads(out.getvalue())["proofs"] == [{"anchor": "file", "path": str(path), "line": 1}]
+    assert json.loads(out.getvalue())["proofs"] == [{"anchor": "file", "file": path.name, "line": 1}]
     assert len(path.read_text().splitlines()) == 1
 
     assert main(["anchors", "-s", str(site.dir), "--clear"], clock=clock, out=io.StringIO()) == 0
