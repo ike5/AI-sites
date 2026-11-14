@@ -36,6 +36,22 @@ CREATE TABLE IF NOT EXISTS timers (
     id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, path TEXT NOT NULL, what TEXT NOT NULL,
     ref TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS timers_by_time ON timers (at);
+
+-- Milestone 2: signed checkpoints, redaction markers, roles, keys and the private audit trail.
+CREATE TABLE IF NOT EXISTS checkpoints (
+    seq INTEGER PRIMARY KEY, time TEXT NOT NULL, body TEXT NOT NULL, signature TEXT NOT NULL,
+    proofs TEXT NOT NULL DEFAULT '[]');
+CREATE TABLE IF NOT EXISTS log_redactions (
+    seq INTEGER NOT NULL, field TEXT NOT NULL, at TEXT NOT NULL, by_seq INTEGER NOT NULL,
+    PRIMARY KEY (seq, field));
+CREATE TABLE IF NOT EXISTS roles (
+    name TEXT PRIMARY KEY, grants TEXT NOT NULL, description TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS keys (
+    id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, role TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
+    created TEXT NOT NULL, revoked TEXT);
+CREATE TABLE IF NOT EXISTS audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, who TEXT NOT NULL, role TEXT NOT NULL,
+    op TEXT NOT NULL, target TEXT, key TEXT, detail TEXT NOT NULL DEFAULT '{}', ok INTEGER NOT NULL);
 """
 
 
