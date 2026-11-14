@@ -188,16 +188,22 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
     def tick(self) -> None:
         """Turn time boundaries that have passed (a change starting, a record expiring) into feed entries."""
         now = self.now_z()
+        if getattr(self._viewer, "ticking", False):
+            return  # a hook below reads and writes records, which would otherwise tick again
         if not self.store.one("SELECT 1 FROM timers WHERE at <= ? LIMIT 1", (now,)):
             return
-        with self.store.tx():
-            for t in self.store.q("SELECT * FROM timers WHERE at <= ? ORDER BY at, id", (now,)):
-                hook = hooks.TIMERS.get(t["ref"].split(":", 1)[0])
-                if hook:  # a feature acts on its own timers, e.g. releasing an expired hold
-                    hook(self, t)
-                else:
-                    self._change(t["at"], t["path"], t["what"])
-            self.store.x("DELETE FROM timers WHERE at <= ?", (now,))
+        self._viewer.ticking = True
+        try:
+            with self.store.tx():
+                for t in self.store.q("SELECT * FROM timers WHERE at <= ? ORDER BY at, id", (now,)):
+                    hook = hooks.TIMERS.get(t["ref"].split(":", 1)[0])
+                    if hook:  # a feature acts on its own timers, e.g. releasing an expired hold
+                        hook(self, t)
+                    else:
+                        self._change(t["at"], t["path"], t["what"])
+                self.store.x("DELETE FROM timers WHERE at <= ?", (now,))
+        finally:
+            self._viewer.ticking = False
 
     def etag(self, owner: bool = False, extra: str = "") -> str:
         """A validator for what this reader can see.
@@ -610,6 +616,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
 
     def get(self, name: str, key: str) -> dict:
         """One record with everything the owner may see, or one tree node with its subtree."""
+        self.tick()
         sdef = self._sdef(name)
         self._no_form(sdef)
         if sdef.type == "tree":
@@ -620,6 +627,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
     def list(self, name: str, where: Optional[dict] = None, sort: Optional[str] = None, limit: int = 100,
              cursor: Optional[str] = None, fields: Optional[list] = None, owner: bool = True) -> dict:
         """Records matching filters such as {"price.lt": 50, "region": "MX"}, sorted and paged."""
+        self.tick()
         sdef = self._sdef(name)
         self._no_form(sdef)
         if sdef.type == "tree":
@@ -777,6 +785,10 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         if not isinstance(set, dict) or not set:
             raise SiteError("invalid", "`set` must name at least one field to change.",
                             'Example: {"price": "47.99"}')
+        held = sdef.settings.get("booking", {}).get("field")
+        if held in set:
+            raise SiteError("invalid", f"'{held}' is the capacity that bookings draw on, so it cannot be scheduled.",
+                            "Set it directly with `change`.")
         now_dt, now = self.now(), self.now_z()
         if on is not None:
             if start is not None or end is not None:
@@ -1053,6 +1065,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         return sdef
 
     def read_record(self, name: str, key: str, owner: bool = False) -> dict:
+        self.tick()
         sdef = self.readable(name, owner)
         if sdef.type != "collection":
             raise SiteError("wrong_structure", f"'{name}' is a tree; read it at /trees/{name}.")

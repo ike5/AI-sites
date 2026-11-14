@@ -68,6 +68,10 @@ def check_setting(site: Any, sdef: StructureDef, value: Any) -> dict:
         raise SiteError("invalid", f"booking.field '{field}' is not a capacity field of '{sdef.name}'.",
                         ("Capacity fields: " + ", ".join(capacity) + ".") if capacity else
                         "Add one with alter, e.g. 'seats:integer:capacity'.")
+    for row in site.store.q("SELECT set_json FROM schedules WHERE collection=?", (sdef.name,)):
+        if field in json.loads(row["set_json"]):
+            raise SiteError("invalid", f"'{field}' has a scheduled change, so bookings cannot draw on it.",
+                            "Cancel that scheduled change with `unschedule` first.", status=409)
     out: dict = {
         "field": field,
         "open": value.get("open", False),
@@ -227,6 +231,28 @@ class BookingsMixin:
 
     # ------------------------------------------------------------ visitor operations
 
+    def _active_bookings(self, sdef: StructureDef, caller: ops.Principal) -> int:
+        """Holds, plus confirmed bookings for things still to come.
+
+        A booking whose record has ended or expired no longer counts, or a regular customer would use up
+        the limit for good.
+        """
+        now, active = self.now_z(), 0
+        for b in self.store.q("SELECT key, status FROM bookings WHERE caller=? AND collection=? "
+                              "AND status IN ('held','booked')", (caller.id, sdef.name)):
+            if b["status"] == "booked":
+                row = self._row(sdef.name, b["key"])
+                view = self._view(sdef, row, self._schedules(sdef.name, b["key"]).get(b["key"], []), now,
+                                  False) if row else None
+                if view is None:
+                    continue
+                times = view.get("instants", {})
+                over = times.get("end") or times.get("start")
+                if over and over <= now:
+                    continue
+            active += 1
+        return active
+
     def reserve(self, target: str, key: str, quantity: int = 1, caller: ops.Principal = ops.OWNER) -> dict:
         """Hold `quantity` places on a record. The hold expires unless confirmed with `book`."""
         _whole_arg(quantity, "quantity")
@@ -242,8 +268,7 @@ class BookingsMixin:
                 raise not_found(f"Record '{key}' in '{target}'",
                                 f"List what can be booked with GET /collections/{target}.")
             if not owner:
-                active = self.store.one("SELECT COUNT(*) AS n FROM bookings WHERE caller=? AND collection=? "
-                                        "AND status IN ('held','booked')", (caller.id, target))["n"]
+                active = self._active_bookings(sdef, caller)
                 limit = setting["max_active_per_caller"]
                 if active >= limit:
                     raise SiteError("too_many_bookings", f"This caller already has {active} active holds or "
