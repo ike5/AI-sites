@@ -185,6 +185,20 @@ def create_app(site: Site) -> FastAPI:
     def history(request: Request):
         return history_reply(request, is_owner(request), None, "History")
 
+    # Signed head and checkpoints. Registered before /history/{seq}, which would otherwise capture them.
+
+    @app.get("/history/head")
+    def history_head(request: Request):
+        owner = is_owner(request)
+        return reply(request, site.head_view(), owner, "Signed history head", site.checkpoint_tag())
+
+    @app.get("/history/checkpoints")
+    def history_checkpoints(request: Request):
+        owner = is_owner(request)
+        q = request.query_params
+        return reply(request, site.checkpoints(q.get("after", 0), q.get("limit", 100)), owner, "Checkpoints",
+                     site.checkpoint_tag())
+
     @app.get("/history/{seq}")
     def history_entry(request: Request, seq: int):
         owner = is_owner(request)

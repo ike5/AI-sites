@@ -141,6 +141,9 @@ OPS = {op.name: op for op in [
        {"date": {"description": "YYYY-MM-DD, today or tomorrow. Defaults to today."},
         "key": {"type": "string", "description": "One hours record; omit for all."}},
        mutates=False),
+    Op("checkpoint", "Sign the current history head, store it, and send it to the site's anchors. Returns "
+                     "the signed checkpoint with each anchor's proof.",
+       lambda site: site.checkpoint()),
 ]}
 
 _TYPES = {"string": str, "integer": int, "boolean": bool, "object": dict, "array": list}
