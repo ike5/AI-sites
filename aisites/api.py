@@ -29,14 +29,21 @@ def create_app(site: Site) -> FastAPI:
         auth = request.headers.get("authorization", "")
         return auth[7:].strip() if auth[:7].lower() == "bearer " else None
 
-    def is_owner(request: Request) -> bool:
+    def principal(request: Request) -> Optional[ops.Principal]:
+        """The caller a bearer token names; None without a token. An unknown token is refused."""
         t = token(request)
         if t is None:
-            return False
-        if not site.check_owner(t):
+            return None
+        found = site.resolve(t)
+        if found is None:
             raise SiteError("bad_key", "That key is not valid for this site.",
                             "Public data needs no key; omit the Authorization header.", status=401)
-        return True
+        return found
+
+    def is_owner(request: Request) -> bool:
+        # A role key is valid here but reads like a visitor; roles act through the admin and MCP doors.
+        found = principal(request)
+        return found is not None and found.kind == "owner"
 
     def headers(request: Request, etag: str) -> dict:
         return {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Accept, Authorization",
@@ -199,14 +206,14 @@ def create_app(site: Site) -> FastAPI:
     def admin_ops(request: Request):
         return JSONResponse({"operations": ops.describe_ops(),
                              "call": "POST {prefix}/admin/{target}/{op} with a JSON body of the other arguments "
-                                     "and Authorization: Bearer <owner key>. Operations without a target: "
+                                     "and Authorization: Bearer <owner key or role key>. Operations without a target: "
                                      "POST {prefix}/admin/{op}.".replace("{prefix}", prefix(request))})
 
     async def admin(request: Request, op: str, target: Optional[str]) -> Response:
         if token(request) is None:
             raise SiteError("needs_key", "Admin operations need the site owner's key.",
                             "Send it as: Authorization: Bearer <owner key>", status=401)
-        principal = ops.OWNER if is_owner(request) else ops.ANONYMOUS
+        caller = principal(request)
         raw = await request.body()
         try:
             args = json.loads(raw) if raw.strip() else {}
@@ -216,7 +223,7 @@ def create_app(site: Site) -> FastAPI:
             raise SiteError("invalid", "The request body must be a JSON object of arguments.")
         if target is not None:
             args["target"] = target
-        result = await run_in_threadpool(ops.run, site, principal, op, args)
+        result = await run_in_threadpool(ops.run, site, caller, op, args)
         return JSONResponse(result)
 
     @app.post("/admin/{op}")

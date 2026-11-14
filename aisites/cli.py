@@ -28,11 +28,14 @@ POSITIONAL = {
     "add": ["target"], "get": ["target", "key"], "list": ["target"], "change": ["target", "key"],
     "remove": ["target", "key"], "move": ["target", "key"], "schedule": ["target", "key"],
     "unschedule": ["target", "key", "schedule"], "confirm": ["target", "key"], "hours": [],
+    "set_role": ["role"], "drop_role": ["role"], "issue_key": ["role"], "revoke_key": ["id"],
+    "list_keys": [], "audit": [],
 }
 # Where an operation's name=value pairs go. None means they are the operation's own arguments.
 PAIRS = {"configure": None, "add": "data", "list": "where", "change": "set", "schedule": "set"}
 # Friendlier option names for a few arguments.
-OPTION_NAMES = {("define", "fields"): "--field", ("define", "refs"): "--ref", ("alter", "refs"): "--ref"}
+OPTION_NAMES = {("define", "fields"): "--field", ("define", "refs"): "--ref", ("alter", "refs"): "--ref",
+                ("set_role", "grants"): "--grant"}
 
 
 def _pairs(tokens: list) -> dict:
@@ -50,6 +53,19 @@ def _pairs(tokens: list) -> dict:
         else:
             raise SiteError("invalid", f"'{token}' is not a name=value pair.",
                             "Write field=value, or field:=<json> for lists, objects and null.")
+    return out
+
+
+def _grants(items: list) -> list:
+    """Each --grant is one JSON grant object, or a JSON array of them."""
+    out: list = []
+    for item in items:
+        try:
+            value = json.loads(item)
+        except ValueError:
+            raise SiteError("invalid", f"'{item}' after --grant is not valid JSON.",
+                            '--grant \'{"target": "games", "ops": ["change"], "fields": ["price"]}\'')
+        out += value if isinstance(value, list) else [value]
     return out
 
 
@@ -97,7 +113,9 @@ def _op_args(op: ops.Op, argv: list) -> tuple:
         if value is None:
             continue
         kind = op.params.get(name, {}).get("type")
-        if kind == "array":
+        if kind == "array" and name == "grants":
+            value = _grants(value)
+        elif kind == "array":
             value = [part for item in value for part in (item.split(",") if name in ("fields", "remove")
                                                          and op.name != "define" else [item])]
         elif kind == "object":
@@ -147,7 +165,7 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
             site_dir, args = _op_args(ops.OPS[command], rest)
             site = Site(_site_dir(site_dir), clock)
             try:
-                _emit(ops.run(site, ops.OWNER, command, args), out)
+                _emit(ops.run(site, ops.LOCAL, command, args), out)
             finally:
                 site.close()
             return 0
