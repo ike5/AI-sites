@@ -28,6 +28,7 @@ POSITIONAL = {
     "add": ["target"], "get": ["target", "key"], "list": ["target"], "change": ["target", "key"],
     "remove": ["target", "key"], "move": ["target", "key"], "schedule": ["target", "key"],
     "unschedule": ["target", "key", "schedule"], "confirm": ["target", "key"], "hours": [],
+    "redact": ["seq"],
 }
 # Where an operation's name=value pairs go. None means they are the operation's own arguments.
 PAIRS = {"configure": None, "add": "data", "list": "where", "change": "set", "schedule": "set"}
@@ -102,6 +103,11 @@ def _op_args(op: ops.Op, argv: list) -> tuple:
                                                          and op.name != "define" else [item])]
         elif kind == "object":
             value = _pairs(value)
+        elif name == "seq":
+            try:
+                value = int(value)
+            except ValueError:
+                raise SiteError("invalid", "The history sequence number must be a whole number.")
         elif name == "schedule":
             try:
                 value = int(value)

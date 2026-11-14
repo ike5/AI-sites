@@ -128,6 +128,14 @@ OPS = {op.name: op for op in [
     Op("confirm", "Record that a record is still true as of now, without changing it.",
        lambda site, target, key: site.confirm(target, key), {"target": _TARGET, "key": _KEY},
        ("target", "key")),
+    Op("redact", "Remove a past value from the public history (for example after a takedown request). The "
+                 "chain still verifies. Refused while the value is still current.",
+       lambda site, seq, fields=None, reason="": site.redact(seq, fields, reason),
+       {"seq": {"type": "integer", "description": "Sequence number of the history entry."},
+        "fields": {"type": "array", "description": "Fields to redact; omit for every field the entry still "
+                                                   "has. Omit for a sealed entry."},
+        "reason": {"type": "string", "description": "Optional public note, one line, up to 200 characters."}},
+       ("seq",)),
     Op("hours", "Open or closed on a date, as visitors would be told.",
        lambda site, date=None, key=None: site.hours(date, key, owner=True),
        {"date": {"description": "YYYY-MM-DD, today or tomorrow. Defaults to today."},
