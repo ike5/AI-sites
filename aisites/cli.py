@@ -280,7 +280,9 @@ def _serve(argv: list) -> int:
     else:
         from .api import create_app
         app = create_app(Site(_site_dir(ns.site)))
-    uvicorn.run(app, host=ns.host, port=ns.port, log_level="info")
+    # The server must not rewrite the caller's address from forwarded headers by itself: whether to
+    # believe them is the site's `trust_proxy` limit, set with `aisites set_limits trust_proxy:=true`.
+    uvicorn.run(app, host=ns.host, port=ns.port, log_level="info", proxy_headers=False)
     return 0
 
 
