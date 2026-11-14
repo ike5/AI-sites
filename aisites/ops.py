@@ -233,7 +233,9 @@ def _run(site: Site, principal: Principal, spec: Op, args: Optional[dict]) -> An
     if principal.kind != "role":
         return spec.fn(site, **args)
     hidden = _check_role(site, principal, op, args)
-    return _hide(op, spec.fn(site, **args), hidden)
+    with site.viewing(args.get("target"), hidden):
+        result = spec.fn(site, **args)
+    return _hide(op, result, hidden)
 
 
 # ---------------------------------------------------------------- roles
@@ -289,7 +291,22 @@ def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
             raise _forbidden(f"{who} may not {verb} {what + ' ' if what else ''}{plural} "
                              f"{', '.join(bad)} in '{target}'.",
                              f"In '{target}' it may {op} only: {', '.join(allowed)}.")
-    sdef = site._defs().get(target)
+    defs = site._defs()
+    sdef = defs.get(target)
+    if sdef is not None and sdef.type == "collection" and op in ("add", "change", "schedule"):
+        setting = args.get("data") if op == "add" else args.get("set")
+        for name in (setting if isinstance(setting, dict) else {}):
+            f = sdef.field(str(name))
+            if f is None or not f.choices:
+                continue
+            source = next(iter(f.choices.values()))
+            # Accepting or rejecting a value would reveal which keys exist in the source.
+            readable = (source in defs and defs[source].access == "public") or any(
+                g["target"] in (source, "*") and {"get", "list"} & set(g["ops"]) for g in grants)
+            if not readable:
+                raise _forbidden(f"{who} may not set '{name}' in '{target}': its values come from '{source}', "
+                                 "which this role cannot read.",
+                                 f"Ask the site owner to grant `get` or `list` on '{source}'.")
     if sdef is None or sdef.type != "collection" or any("fields" not in g for g in on):
         return set()
     hidden = set(sdef.names("private")) - {f for g in on for f in g["fields"]}

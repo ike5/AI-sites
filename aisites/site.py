@@ -13,6 +13,8 @@ import json
 import os
 import re
 import secrets
+import threading
+from contextlib import contextmanager
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -51,6 +53,7 @@ class Site:
         self.store = Store(str(db))
         self.clock = clock or (lambda: datetime.now(timeview.UTC))
         self.history = History(self.store, self.now_z)
+        self._viewer = threading.local()
         self._anchors = list(anchors or [])
 
     # ------------------------------------------------------------ creation and config
@@ -132,6 +135,29 @@ class Site:
                 self._bump()
         return self.config
 
+    # ------------------------------------------------------------ who is looking
+
+    @contextmanager
+    def viewing(self, structure: Optional[str], hidden: Any):
+        """Within this block, views of `structure` are built for a caller who may not see `hidden` fields.
+
+        Stripping fields from a finished view is not enough: timestamps derived from a hidden field's
+        scheduled change would still give its timing away.
+        """
+        previous = getattr(self._viewer, "limit", None)
+        self._viewer.limit = (structure, frozenset(hidden or ()))
+        try:
+            yield
+        finally:
+            self._viewer.limit = previous
+
+    def _hidden_from(self, sdef: StructureDef, owner: bool = True) -> frozenset:
+        """Fields the current reader may not see: private ones for visitors, a role's hidden set for staff."""
+        if not owner:
+            return frozenset(sdef.names("private"))
+        limit = getattr(self._viewer, "limit", None)
+        return limit[1] if limit and limit[0] == sdef.name else frozenset()
+
     # ------------------------------------------------------------ bookkeeping
 
     def _bump(self) -> None:
@@ -154,9 +180,16 @@ class Site:
             self.store.x("DELETE FROM timers WHERE at <= ?", (now,))
 
     def etag(self, owner: bool = False, extra: str = "") -> str:
+        """A validator for what this reader can see.
+
+        Visitors get one built from the public history head and change feed, so it stays still while
+        only private data changes. Keyed readers get one that follows every write.
+        """
         self.tick()
         last = self.store.one("SELECT COALESCE(MAX(id), 0) AS m FROM changes")["m"]
-        return f'W/"{self.store.meta("rev", 0)}.{last}{".o" if owner else ""}{extra}"'
+        if owner:
+            return f'W/"{self.store.meta("rev", 0)}.{last}.o{extra}"'
+        return f'W/"p{self.history.head()[0]}.{last}{extra}"'
 
     # ------------------------------------------------------------ structures
 
@@ -283,6 +316,7 @@ class Site:
                 if not sdef.field(fname):
                     raise not_found(f"Field '{fname}' in '{name}'")
                 sdef.fields = [f for f in sdef.fields if f.name != fname]
+                self._prune_grants(name, fname)
                 for r in self.store.q("SELECT key, data FROM records WHERE collection=?", (name,)):
                     data = json.loads(r["data"])
                     if fname in data:
@@ -321,6 +355,7 @@ class Site:
             self.store.x("DELETE FROM schedules WHERE collection=?", (name,))
             self.store.x("DELETE FROM timers WHERE substr(path, 1, ?) = ?", (len(prefix), prefix))
             self.store.x("DELETE FROM structures WHERE name=?", (name,))
+            self._prune_grants(name)
             now = self.now_z()
             if sdef.public:
                 self.history.append("delete", f"schemas/{name}")
@@ -380,7 +415,7 @@ class Site:
                                     f"of the {ttype} '{target}'.")
 
     def _clean(self, sdef: StructureDef, data: dict) -> dict:
-        clean = schema.validate(sdef, data, self.tz)
+        clean = schema.validate(sdef, data, self.tz, hide=self._hidden_from(sdef))
         check = kinds.VALIDATORS.get(sdef.kind or "")
         if check:
             check(clean)
@@ -398,8 +433,11 @@ class Site:
         return tuple(out)
 
     def _publish(self, sdef: StructureDef, key: str, values: dict, now: str, data: dict,
-                 what: str = "changed") -> None:
-        """Log and announce a change to a record. Changes to a not-yet-visible record stay sealed."""
+                 what: str = "changed", visible: bool = True) -> None:
+        """Log and announce a change to a record. Changes to a not-yet-visible record stay sealed.
+
+        `visible` is False when only private fields changed: the public feed must not move at all.
+        """
         self._bump()
         if not sdef.public:
             return
@@ -411,7 +449,7 @@ class Site:
                 self.history.append_sealed(valid_from, {"op": "set", "path": path, "values": values})
             else:
                 self.history.append("set", path, values)
-        if not hidden:
+        if not hidden and visible:
             self._change(now, path, what)
         self.store.x("DELETE FROM timers WHERE path=? AND ref='validity'", (path,))
         if hidden:
@@ -453,10 +491,18 @@ class Site:
         visible = (valid_from is None or valid_from <= now) and (valid_until is None or now < valid_until)
         if not owner and not visible:
             return None
-        private = set(sdef.names("private"))
-        if not owner:
-            for name in private:
-                data.pop(name, None)
+        hide = self._hidden_from(sdef, owner)
+        for name in hide:
+            data.pop(name, None)
+
+        def shown(fields: dict) -> dict:
+            return {k: v for k, v in fields.items() if k not in hide}
+
+        def concerns(s: dict) -> bool:
+            """A scheduled change this reader may know about. One touching only hidden fields is not."""
+            return not hide or not s["set"] or bool(shown(s["set"]))
+
+        active, upcoming, ended = ([s for s in group if concerns(s)] for group in (active, upcoming, ended))
         out: dict = {"key": row["key"], "data": data}
         out["updated"] = max([row["updated"]] + [s["start"] for s in active] + [s["end"] for s in ended])
         if row["confirmed"]:
@@ -466,10 +512,6 @@ class Site:
         inst = schema.instants(sdef, data, self.tz)
         if inst:
             out["instants"] = inst
-
-        def shown(fields: dict) -> dict:
-            return fields if owner else {k: v for k, v in fields.items() if k not in private}
-
         if active:
             out["active_changes"] = [{"fields": sorted(shown(s["set"])), "since": s["start"], "until": s["end"]}
                                      for s in active]
@@ -487,8 +529,8 @@ class Site:
         if owner:
             out["visible"] = visible
             if active or upcoming:
-                out["schedules"] = [{k: s[k] for k in ("id", "set", "start", "end", "announced")}
-                                    for s in active + upcoming]
+                out["schedules"] = [{"id": s["id"], "set": shown(s["set"]), "start": s["start"],
+                                     "end": s["end"], "announced": s["announced"]} for s in active + upcoming]
         return out
 
     # ------------------------------------------------------------ collection operations
@@ -625,8 +667,9 @@ class Site:
             changed = {n: clean.get(n) for n in sdef.names() if clean.get(n) != base.get(n)}
             if changed:
                 now = self.now_z()
-                live_names = sdef.live_names()
-                content = any(n not in live_names for n in changed)
+                live_names, private = sdef.live_names(), sdef.names("private")
+                # `updated` is about what visitors can see, so a private-only edit leaves it alone.
+                content = any(n not in live_names and n not in private for n in changed)
                 live = any(n in live_names for n in changed)
                 self.store.x(
                     "UPDATE records SET data=?, version=version+1, updated=?, live_as_of=? "
@@ -634,7 +677,8 @@ class Site:
                     (json.dumps(clean), now if content else updated, now if live else row["live_as_of"],
                      name, row["key"]))
                 logged = {n: v for n, v in changed.items() if n in sdef.logged_names()}
-                self._publish(sdef, row["key"], logged, now, clean, "changed" if content else "live value changed")
+                self._publish(sdef, row["key"], logged, now, clean, "changed" if content else "live value changed",
+                              visible=content or live)
         return self.get(name, key)
 
     def remove(self, name: str, key: str, recursive: bool = False) -> dict:
@@ -719,7 +763,7 @@ class Site:
             sid = cur.lastrowid
             path = f"collections/{name}/{row['key']}"
             started = start_z <= now
-            if sdef.public:
+            if sdef.public and any(n not in sdef.names("private") for n in planned):
                 logged = {n: v for n, v in planned.items() if n in sdef.logged_names()}
                 detail = {"start": start_z, "end": end_z, "schedule": sid}
                 seq = None
@@ -757,7 +801,7 @@ class Site:
             path = f"collections/{name}/{key}"
             self.store.x("DELETE FROM schedules WHERE id=?", (schedule,))
             self.store.x("DELETE FROM timers WHERE ref=?", (f"schedule:{schedule}",))
-            if sdef.public:
+            if sdef.public and any(n not in sdef.names("private") for n in json.loads(row["set_json"])):
                 started = row["start"] <= now
                 if row["announced"] or started:
                     self.history.append("unschedule", path, detail={"schedule": schedule})
@@ -1345,6 +1389,25 @@ class Site:
         keys = [{k: r[k] for k in ("id", "label", "role", "created", "revoked")}
                 for r in self.store.q("SELECT * FROM keys ORDER BY created, id")]
         return {"roles": roles, "keys": keys}
+
+    def _prune_grants(self, target: str, field: Optional[str] = None) -> None:
+        """Forget grants on a dropped structure or removed field, so a later namesake does not inherit them."""
+        for r in self.store.q("SELECT name, grants FROM roles"):
+            kept, dirty = [], False
+            for g in json.loads(r["grants"]):
+                if g.get("target") != target:
+                    kept.append(g)
+                elif field is None:
+                    dirty = True
+                elif field in g.get("fields", []):
+                    dirty = True
+                    rest = [f for f in g["fields"] if f != field]
+                    if rest:  # a grant left with no fields would read as "every field", so it goes
+                        kept.append({**g, "fields": rest})
+                else:
+                    kept.append(g)
+            if dirty:
+                self.store.x("UPDATE roles SET grants=? WHERE name=?", (json.dumps(kept), r["name"]))
 
     def role_grants(self, role: str, key_id: str = "") -> list:
         """The current grants of a role, checked on every call so changes and revocations apply at once."""

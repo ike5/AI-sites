@@ -147,25 +147,30 @@ def _model(def_json: str):
     return create_model(f"Record_{sdef.name}", __config__=config, **fields)
 
 
-def _first_error(e: ValidationError) -> str:
+def _first_error(e: ValidationError, hide: Any = ()) -> str:
     parts = []
-    for err in e.errors()[:5]:
+    for err in e.errors():
+        if err["loc"] and str(err["loc"][0]) in hide:
+            continue
         loc = ".".join(str(p) for p in err["loc"]) or "value"
         parts.append(f"{loc}: {err['msg']}")
-    return "; ".join(parts)
+    return "; ".join(parts[:5]) or "it needs a value this key may not set"
 
 
-def validate(sdef: StructureDef, data: dict, site_tz: ZoneInfo) -> dict:
-    """Check and normalise a whole record. Returns JSON-ready data with unset fields left out."""
+def validate(sdef: StructureDef, data: dict, site_tz: ZoneInfo, hide: Any = ()) -> dict:
+    """Check and normalise a whole record. Returns JSON-ready data with unset fields left out.
+
+    `hide` names fields the caller may not know about; errors and hints leave them out.
+    """
     if not isinstance(data, dict):
         raise SiteError("invalid", "Record data must be an object of field values.")
     try:
         model = _model(json.dumps(sdef.dump(), sort_keys=True))
         clean = model(**data).model_dump(mode="json", exclude_none=True)
     except ValidationError as e:
-        raise SiteError("invalid", f"'{sdef.name}' record is not valid: {_first_error(e)}",
+        raise SiteError("invalid", f"'{sdef.name}' record is not valid: {_first_error(e, hide)}",
                         "Fields: " + ", ".join(f"{f.name} ({f.type}{', required' if f.required else ''})"
-                                               for f in sdef.fields))
+                                               for f in sdef.fields if f.name not in hide))
     tz = record_zone(sdef, clean, site_tz)
     for f in sdef.fields:
         if f.type == "datetime" and f.name in clean:
