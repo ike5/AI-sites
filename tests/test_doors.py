@@ -149,7 +149,7 @@ def test_cli_reports_errors_as_json(site, capsys):
     assert main(["add", "nothing", "not-a-pair", "-s", str(site.dir)]) == 1
     assert "name=value" in json.loads(capsys.readouterr().err)["error"]["message"]
     assert main(["guide"]) == 0
-    assert "Three structures" in capsys.readouterr().out
+    assert "# Authoring an AI-sites site" in capsys.readouterr().out
 
 
 def test_cli_creates_sites_and_rotates_keys(tmp_path, capsys):
