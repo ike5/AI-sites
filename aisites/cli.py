@@ -22,22 +22,9 @@ from . import ops
 from .errors import SiteError
 from .site import Site
 
-# Positional arguments each operation takes, in order. A trailing ? marks an optional one.
-POSITIONAL = {
-    "describe": ["target?"], "configure": [], "define": ["target"], "alter": ["target"], "drop": ["target"],
-    "add": ["target"], "get": ["target", "key"], "list": ["target"], "change": ["target", "key"],
-    "remove": ["target", "key"], "move": ["target", "key"], "schedule": ["target", "key"],
-    "unschedule": ["target", "key", "schedule"], "confirm": ["target", "key"], "hours": [],
-    "redact": ["seq"],
-    "set_role": ["role"], "drop_role": ["role"], "issue_key": ["role"], "revoke_key": ["id"],
-    "list_keys": [], "audit": [],
-}
-POSITIONAL["checkpoint"] = []
-# Where an operation's name=value pairs go. None means they are the operation's own arguments.
-PAIRS = {"configure": None, "add": "data", "list": "where", "change": "set", "schedule": "set"}
-# Friendlier option names for a few arguments.
-OPTION_NAMES = {("define", "fields"): "--field", ("define", "refs"): "--ref", ("alter", "refs"): "--ref",
-                ("set_role", "grants"): "--grant"}
+# Each operation says how it reads on the command line (`Op.positional`, `Op.pairs`, `Op.flags`), so a
+# new operation needs no change here. This table is a snapshot kept for callers that want an overview.
+POSITIONAL = {name: list(op.positional) for name, op in ops.OPS.items()}
 
 
 def _pairs(tokens: list) -> dict:
@@ -74,22 +61,22 @@ def _grants(items: list) -> list:
 def _op_parser(op: ops.Op) -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog=f"aisites {op.name}", description=op.summary)
     p.add_argument("-s", "--site", help="site folder (default: $AISITES_SITE or the current folder)")
-    positional = POSITIONAL[op.name]
+    positional = list(op.positional)
     for name in positional:
         if name.endswith("?"):
             p.add_argument(name[:-1], nargs="?")
         else:
             p.add_argument(name)
     taken = {n.rstrip("?") for n in positional}
-    if op.name in PAIRS:
+    if op.pairs:
         p.add_argument("pairs", nargs="*", metavar="name=value")
         p.add_argument("--json", help="the name=value pairs as one JSON object instead")
-        if PAIRS[op.name]:
-            taken.add(PAIRS[op.name])
+        if op.pairs != "*":
+            taken.add(op.pairs)
     for name, spec in op.params.items():
-        if name in taken or (op.name == "configure"):
+        if name in taken or op.pairs == "*":
             continue
-        flag = OPTION_NAMES.get((op.name, name), "--" + name)
+        flag = op.flags.get(name, "--" + name)
         kind = spec.get("type")
         desc = spec.get("description", "")
         if kind == "boolean":
@@ -122,27 +109,21 @@ def _op_args(op: ops.Op, argv: list) -> tuple:
                                                          and op.name != "define" else [item])]
         elif kind == "object":
             value = _pairs(value)
-        elif name == "seq":
-            try:
+        elif kind == "integer" and not isinstance(value, int):
+            try:  # a positional argument arrives as text
                 value = int(value)
             except ValueError:
-                raise SiteError("invalid", "The history sequence number must be a whole number.")
-        elif name == "schedule":
-            try:
-                value = int(value)
-            except ValueError:
-                raise SiteError("invalid", "The scheduled change id must be a whole number.")
+                raise SiteError("invalid", f"`{name}` must be a whole number.")
         args[name] = value
-    if op.name in PAIRS:
+    if op.pairs:
         try:
             given = json.loads(raw_json) if raw_json else _pairs(pairs)
         except ValueError:
             raise SiteError("invalid", "--json is not valid JSON.")
-        dest = PAIRS[op.name]
-        if dest is None:
+        if op.pairs == "*":
             args.update(given)
-        elif given or dest in op.required:
-            args[dest] = given
+        elif given or op.pairs in op.required:
+            args[op.pairs] = given
     return site_dir, args
 
 

@@ -7,10 +7,14 @@ operation has the same name, arguments, rules and result wherever it is invoked.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from .errors import SiteError
-from .site import ROLE_OPS, Site
+if TYPE_CHECKING:
+    from .site import Site
+
+# The only operations a staff role can be granted (plus `describe` of a structure it has a grant on).
+ROLE_OPS = ("add", "get", "list", "change", "remove", "move", "schedule", "unschedule", "confirm")
 
 
 @dataclass(frozen=True)
@@ -46,6 +50,15 @@ class Op:
     params: dict = field(default_factory=dict)
     required: tuple = ()
     mutates: bool = True
+    # Command line: arguments given by position, where name=value pairs go ("*" means they are the
+    # operation's own arguments), and friendlier flag names for some arguments.
+    positional: tuple = ()
+    pairs: Optional[str] = None
+    flags: dict = field(default_factory=dict)
+    # A visitor operation is reached through /actions by guests, not through the admin door.
+    visitor: bool = False
+    # The structure setting that switches a visitor operation on, e.g. "booking".
+    setting: Optional[str] = None
 
     def schema(self) -> dict:
         return {"type": "object", "properties": self.params, "required": list(self.required),
@@ -59,7 +72,18 @@ def _list(site: Site, target: str, where=None, sort=None, limit=100, cursor=None
     return site.list(target, where, sort, limit, cursor, fields)
 
 
-OPS = {op.name: op for op in [
+OPS: dict = {}
+
+
+def register(*new: Op) -> None:
+    """Add operations to the table. Each module registers the operations it implements."""
+    for op in new:
+        if op.name in OPS:
+            raise ValueError(f"operation '{op.name}' is already registered")
+        OPS[op.name] = op
+
+
+register(
     Op("describe", "Show the site's settings, structures and available kinds, or one structure's definition.",
        lambda site, target=None: site.describe(target), {"target": _TARGET}, mutates=False),
     Op("configure", "Change site settings: name, description, timezone (region name), language, currency.",
@@ -135,51 +159,24 @@ OPS = {op.name: op for op in [
     Op("confirm", "Record that a record is still true as of now, without changing it.",
        lambda site, target, key: site.confirm(target, key), {"target": _TARGET, "key": _KEY},
        ("target", "key")),
-    Op("redact", "Remove a past value from the public history (for example after a takedown request). The "
-                 "chain still verifies. Refused while the value is still current.",
-       lambda site, seq, fields=None, reason="": site.redact(seq, fields, reason),
-       {"seq": {"type": "integer", "description": "Sequence number of the history entry."},
-        "fields": {"type": "array", "description": "Fields to redact; omit for every field the entry still "
-                                                   "has. Omit for a sealed entry."},
-        "reason": {"type": "string", "description": "Optional public note, one line, up to 200 characters."}},
-       ("seq",)),
     Op("hours", "Open or closed on a date, as visitors would be told.",
        lambda site, date=None, key=None: site.hours(date, key, owner=True),
        {"date": {"description": "YYYY-MM-DD, today or tomorrow. Defaults to today."},
         "key": {"type": "string", "description": "One hours record; omit for all."}},
        mutates=False),
-    Op("checkpoint", "Sign the current history head, store it, and send it to the site's anchors. Returns "
-                     "the signed checkpoint with each anchor's proof.",
-       lambda site: site.checkpoint()),
+)
 
-    # Roles, keys and the private audit trail. Owner-only, like every operation not in ROLE_OPS.
-    Op("set_role", "Create or replace a role: a name and grants limiting it to certain structures, operations "
-                   "and fields. Takes effect at once.",
-       lambda site, role, grants, description="": site.set_role(role, grants, description),
-       {"role": {"type": "string", "description": "Role name, e.g. pricing."},
-        "grants": {"type": "array", "description": 'Grants, each {"target": <structure name or "*">, "ops": '
-                                                   '[operation names], "fields": [optional: only these]}.'},
-        "description": _S},
-       ("role", "grants")),
-    Op("drop_role", "Delete a role. Fails while unrevoked keys still use it.",
-       lambda site, role: site.drop_role(role), {"role": {"type": "string"}}, ("role",)),
-    Op("issue_key", "Issue a key for a role. The secret is shown only in this reply.",
-       lambda site, role, label="": site.issue_key(role, label),
-       {"role": {"type": "string"}, "label": {"type": "string", "description": "Who or what the key is for."}},
-       ("role",)),
-    Op("revoke_key", "Revoke a role key by its id. It stops working at once.",
-       lambda site, id: site.revoke_key(id),
-       {"id": {"type": "string", "description": "Key id, from list_keys."}}, ("id",)),
-    Op("list_keys", "List roles with their grants, and keys with id, label, role, created and revoked.",
-       lambda site: site.list_keys(), {}, mutates=False),
-    Op("audit", "Read the private audit trail of changes, newest first: who made each and whether it was "
-                "allowed.",
-       lambda site, **kw: site.audit(**kw),
-       {"who": {"type": "string", "description": "A key id, owner or local."},
-        "target": {"type": "string", "description": "Only entries for this structure."},
-        "limit": _I, "cursor": _S},
-       mutates=False),
-]}
+for _name, _positional, _pairs, _flags in [
+    ("describe", ("target?",), None, {}), ("configure", (), "*", {}),
+    ("define", ("target",), None, {"fields": "--field", "refs": "--ref"}),
+    ("alter", ("target",), None, {"refs": "--ref"}), ("drop", ("target",), None, {}),
+    ("add", ("target",), "data", {}), ("get", ("target", "key"), None, {}), ("list", ("target",), "where", {}),
+    ("change", ("target", "key"), "set", {}), ("remove", ("target", "key"), None, {}),
+    ("move", ("target", "key"), None, {}), ("schedule", ("target", "key"), "set", {}),
+    ("unschedule", ("target", "key", "schedule"), None, {}), ("confirm", ("target", "key"), None, {}),
+    ("hours", (), None, {}),
+]:
+    OPS[_name].positional, OPS[_name].pairs, OPS[_name].flags = _positional, _pairs, _flags
 
 _TYPES = {"string": str, "integer": int, "boolean": bool, "object": dict, "array": list}
 
@@ -334,14 +331,40 @@ def _hide(op: str, result: Any, hidden: set) -> Any:
         result["fields"] = [f for f in result.get("fields", []) if f.get("name") not in hidden]
     elif op == "list":
         for item in result.get("items", []):
-            Site.without_fields(item, hidden)
+            _without_fields(item, hidden)
     elif op in ("schedule", "unschedule"):
-        Site.without_fields(result.get("record"), hidden)
+        _without_fields(result.get("record"), hidden)
         if isinstance(result.get("schedule"), dict):
             result["schedule"]["set"] = {k: v for k, v in result["schedule"]["set"].items() if k not in hidden}
     elif "data" in result:
-        Site.without_fields(result, hidden)
+        _without_fields(result, hidden)
     return result
+
+
+def _without_fields(view: dict, hidden: set) -> dict:
+    """A record view with some fields removed everywhere they appear, including scheduled changes."""
+    if not hidden or not isinstance(view, dict):
+        return view
+    view["data"] = {k: v for k, v in view.get("data", {}).items() if k not in hidden}
+    if "instants" in view:
+        view["instants"] = {k: v for k, v in view["instants"].items() if k not in hidden}
+        if not view["instants"]:
+            del view["instants"]
+    for name, setkey in (("schedules", "set"), ("upcoming_changes", "set"), ("active_changes", "fields")):
+        if name not in view:
+            continue
+        kept = []
+        for s in view[name]:
+            inner = s[setkey]
+            trimmed = ({k: v for k, v in inner.items() if k not in hidden} if isinstance(inner, dict)
+                       else [k for k in inner if k not in hidden])
+            if trimmed or not inner:
+                kept.append({**s, setkey: trimmed})
+        if kept:
+            view[name] = kept
+        else:
+            del view[name]
+    return view
 
 
 # ---------------------------------------------------------------- audit trail
