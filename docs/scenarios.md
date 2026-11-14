@@ -16,17 +16,18 @@ designed; if it cannot be, that gap is the thing to discuss.
 | A person keeps a private calendar their AI reads and writes | 1 | `Event` kind, `private` access, zone per event, date-range filters | `examples/personal_calendar.py` | `test_private_calendar_through_the_owners_ai` |
 | Ten years of verifiable history; legal takedown without breaking verification | 2 | Signed head, checkpoints, verifier with pinning, redaction of committed values | `examples/game_catalogue.py` | `test_takedown_end_to_end_keeps_history_verifiable` |
 | A product manager may change prices but nothing else | 2 | Roles limited to structure, field and operation; role keys; private audit trail | `examples/game_catalogue.py` | `test_product_manager_changes_and_schedules_prices_only` |
+| A restaurant: check availability and book a table | 3 | `Slot` kind, `booking` setting, `reserve` / `book` / `release`, holds that expire, retry safety, payment hand-off | `examples/restaurant.py` | `test_restaurant_flow_through_the_web` |
+| A child's play times, readable only by invited friends' AIs | 3 | `invite` access, guest key with `read` and booking grants | `examples/hangout.py` | `test_hangout_needs_a_friends_key` |
+| A visitor's AI sends the owner a message | 3 (key-holders) | `form` structure, one cleaned text field, `inbox` without text, untrusted envelope, inbox role, single reply | `examples/contact_form.py` | `test_visiting_agent_flow` |
+| An agent is told when something changes (snow day, service disruption) | 3 | `/changes/stream` (server-sent events) on top of `/changes` | — | `test_change_made_while_open_is_delivered` |
 
 ## Planned
 
 | Scenario | Milestone | Primitives it will use |
 |---|---|---|
-| A restaurant: check availability and book a table | 3 | `Slot` kind, reserve/release on `capacity`, retry safety, holds that expire |
-| A child's play times, readable only by invited friends' AIs | 3 | `invite` access with guest keys |
-| An agent is told when something changes (snow day, service disruption) | 3 | Webhooks and a streaming feed on top of `/changes` |
-| A visitor's AI sends the owner a message | 3 (invited), 4 (identified) | Owner-defined form, one capped text field, untrusted labelling, restricted inbox role |
 | An agent changes a user's account on their behalf | 4 | Key-based identity with a signed, time-limited permission |
-| Payment for a booking or purchase | 3 (hand-off), later (providers) | Action returns a payment hand-off; the framework never sees card data |
+| A stranger's AI sends the owner a message | 4 | Key-based identity, approved contacts, one fixed-form contact request |
+| Payment for a booking or purchase | 3 (hand-off, delivered), later (providers) | Action returns a payment hand-off; the framework never sees card data |
 
 ## Later, not yet scheduled
 
@@ -37,3 +38,4 @@ designed; if it cannot be, that gap is the thing to discuss.
 | Back-and-forth conversation between two AIs | Threads; each turn is a further injection risk |
 | Finding sites in the first place | A directory or search index, outside the framework |
 | Facts vouched for by a third party (parent at this school, over 18) | Credentials from trusted issuers |
+| An agent is called back when something changes (webhooks) | Outbound requests tied to an accountable caller |

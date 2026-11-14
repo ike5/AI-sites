@@ -6,9 +6,9 @@ More and more visits to a site come from an AI acting for a person. AI-sites ser
 typed data it can read cheaply, a clear statement of how fresh each fact is, a public history it can look
 back through, and one small set of operations for whoever maintains the site, human or AI.
 
-**Status: Milestones 1 and 2 of 4.** Reading, discovery, time, the four editing doors and multi-site hosting work
-and are tested. Signed history with a verifier, redaction, and roles with an audit trail now work too. Actions and
-identity come next; see [Roadmap](#roadmap).
+**Status: Milestones 1, 2 and 3 of 4.** Reading, discovery, time, the four editing doors and multi-site hosting work
+and are tested. Signed history with a verifier, redaction, and roles with an audit trail work too. Acting on a site
+(bookings, guest keys, message forms, streaming) now works. Key-based identity comes next; see [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -37,13 +37,14 @@ $ curl 'localhost:8000/hours?date=2026-11-17'        # or date=today, date=tomor
 `site create` prints an owner key once. The web admin API and remote MCP need it; the command line,
 Python and local MCP work on the site folder directly.
 
-Five complete example sites are in [`examples/`](examples): a school, a street cart, a game catalogue
-with regional prices and a one-day discount, a pharmacy chain with stock per branch, and a private
-personal calendar. Each runs with `python -m examples.<name> <folder>`.
+Eight complete example sites are in [`examples/`](examples): a school, a street cart, a game catalogue
+with regional prices and a one-day discount, a pharmacy chain with stock per branch, a private
+personal calendar, a restaurant that takes bookings, a child's play times for invited friends, and a
+contact form. Each runs with `python -m examples.<name> <folder>`.
 
 ## The model
 
-Everything is built from three structures and one set of operations. The full guide is
+Everything is built from four structures and one set of operations. The full guide is
 [`aisites/authoring.md`](aisites/authoring.md), also printed by `aisites guide`.
 
 | Structure | What it is | Human equivalent |
@@ -51,15 +52,18 @@ Everything is built from three structures and one set of operations. The full gu
 | Collection | Records sharing a schema, looked up by key | Table |
 | Tree | Nested nodes with ids | Hierarchy, menu |
 | Choice | A field whose value must come from a collection or tree | Dropdown |
+| Form | A structure visitors can add to but not read | Contact form |
 
 | Level | Operations |
 |---|---|
-| Site | `describe`, `configure` |
+| Site | `describe`, `configure`, `set_limits` |
 | Structure | `define`, `alter`, `drop` |
 | Record or node | `add`, `get`, `list`, `change`, `remove`, `move` |
 | Time | `schedule`, `unschedule`, `confirm`, `hours` |
 | History | `redact`, `checkpoint` |
 | Access | `set_role`, `drop_role`, `issue_key`, `revoke_key`, `list_keys`, `audit` |
+| Visitor actions | `reserve`, `book`, `release`, `booking`, `submit`, `ticket` |
+| Bookings and messages | `bookings`, `inbox`, `read_message`, `reply` |
 
 Structures are defined as data, not code, so an AI can create them and a host can serve many sites
 without running anyone's Python.
@@ -97,6 +101,20 @@ prices or hours across sites: `Business`, `Place`, `Hours`, `Closure`, `Notice`,
 
 Each structure is `public`, `invite` or `private`. Private structures are invisible without the owner key.
 
+### Guest keys
+
+A guest key is an ordinary role key whose role is granted visitor operations. There is no separate concept:
+
+```
+aisites set_role diners --grant '{"target":"tables","ops":["read","reserve","book","release","booking"]}'
+aisites issue_key diners --label "Regulars"
+```
+
+- The grant `read` lets a key read an invite-only structure on the public read routes. It gets the visitor
+  view, with no private fields.
+- Staff grants (such as `change`) and guest grants (such as `reserve`) are separate. Having one gives nothing
+  of the other.
+
 ### Roles and the audit trail
 
 A role is a name with a list of grants. A grant names a structure (or `*` for all), the operations allowed
@@ -107,7 +125,8 @@ on it, and optionally the only fields it may touch:
 ```
 
 Roles can be granted `add`, `get`, `list`, `change`, `remove`, `move`, `schedule`, `unschedule`, `confirm`
-and `describe`. Every other operation is for the owner only. With a field list, `change` and `schedule` may
+and `describe`, and on a form `inbox`, `read_message` and `reply`. `bookings` can be granted to a staff role.
+Guest roles are granted visitor operations (see [Guest keys](#guest-keys)). Every other operation is for the owner only. With a field list, `change` and `schedule` may
 set only those fields, and `remove` and `move` are refused because they affect the whole record. A role's
 change takes effect at once; there is no approval step.
 
@@ -144,15 +163,103 @@ or the manifest. Read it with `aisites audit --who <key id, owner or local> --ta
 | `GET /trees/{name}` | A tree; `node=` for a subtree, `depth=` to limit it |
 | `GET /hours?date=` | Open or closed on a date (`today`, `tomorrow`, `YYYY-MM-DD`) |
 | `GET /changes?since=` | What changed since a cursor |
+| `GET /changes/stream` | The same feed as server-sent events; resumes from `since=` or `Last-Event-ID` |
+| `GET /actions` | Every action a visitor can take, per structure, with its arguments as JSON Schema |
+| `POST /actions/{target}/{op}` | Take a visitor action with a JSON object of arguments; custom actions are at `POST /actions/{name}` |
+| `GET /bookable/{target}` | What a booking needs: hold length, details schema, whether there is a payment step |
+| `GET /forms/{name}` | A message form's fields, purposes, limits and how to submit |
 | `GET /history`, `/collections/{name}/{key}/history` | Past values, paged; never loaded unless asked for |
 | `GET /history/head` | Current head of the history, signed with the site key; anchor proofs once checkpointed |
 | `GET /history/checkpoints` | Stored checkpoints, paged with `after` and `limit` |
 | `GET /openapi.json` | Generated from the site's structures |
 
-- Reads are never rate limited. Every response has an ETag and answers `If-None-Match` with 304.
+- Reads are never limited by quotas. The change stream allows 5 open streams per network address. Every response
+  has an ETag and answers `If-None-Match` with 304.
 - Every response links to the manifest, so an agent landing anywhere can find the entry point.
 - HTML is returned only when `Accept` asks for it; it is a plain rendering of the same data.
 - Errors share one shape: `{"error": {"code", "message", "hint"}}`.
+
+## Acting on a site
+
+A site can also take actions, such as booking a table or sending a message. The owner decides what is
+allowed. Each action is one request with a JSON object of arguments.
+
+### The visitor door
+
+```
+POST /actions/tables/reserve
+Idempotency-Key: 6f1c0d2e9a4b4c7e8f0a1b2c3d4e5f60
+{"key": "fri-8pm", "quantity": 2}
+```
+
+- `GET /actions` lists every action a visitor can take, per structure, with its arguments as JSON Schema and
+  whether it needs a key. The manifest links to it (`links.actions`), and each structure lists its `actions`.
+- Retry safety: a changing action needs an `Idempotency-Key` header with any fresh random value. Repeating the
+  same key and body returns the first answer with `Idempotent-Replay: true` and does not act twice. The same key
+  with a different body gets 409 `idempotency_mismatch`. Without the header the answer is 400 `needs_idempotency_key`.
+- Preview: add `?dry_run=true` to run the action and roll it back. The answer is `{"dry_run": true, "result": {...}}`.
+  Nothing is stored and nothing is charged.
+- Quotas apply to changing actions only. Defaults: 1000 per key per UTC day, 20 per network address per UTC day for
+  callers without a key, and 4 changing calls in flight per caller. Over the limit the answer is 429 with `Retry-After`.
+  The owner is not limited. Change them with `aisites set_limits anonymous_per_day:=50` (also `key_per_day`,
+  `concurrent`, `trust_proxy`). `aisites set_limits` with no arguments shows them.
+- Callers without a key are identified by a hash of their network address; addresses are not stored. A forwarded
+  address (`X-Forwarded-For`) is believed only when `trust_proxy` is true, which should be set only behind your own proxy.
+- Every changing visitor action is written to the private audit trail.
+
+### Bookings
+
+```
+aisites define tables --kind Slot --setting 'booking:={"open": true, "hold_minutes": 15, "details": ["name!:string", "party_size!:integer"]}'
+```
+
+- A collection with a capacity field becomes bookable with the `booking` setting. `hold_minutes` is 1 to 30,
+  default 15. `field` defaults to the structure's only capacity field. With `"open": true` anyone may book;
+  otherwise a key granted the operations is needed.
+- `reserve` (`key`, optional `quantity`) places a hold and lowers the capacity at once, never below zero.
+  `book` (`booking`, `details`) confirms the caller's own hold with the details the owner requires. If payment
+  is configured, it returns a payment hand-off.
+- `release` (`booking`) cancels a hold or booking and returns the capacity. `booking` (`booking`) shows the status
+  of the caller's own booking. A hold that is not confirmed in time releases itself.
+- A caller may have at most `max_active_per_caller` holds and upcoming bookings in a structure. A caller sees and
+  acts only on its own bookings; for anyone else's the answer is "not found", the same as for an id that does not exist.
+- Bookings and their details are private. Visitors see only the capacity value change, with `live_as_of`.
+- `GET /bookable/{target}` tells a visiting agent the hold length, the details schema and whether there is a payment step.
+- The owner lists bookings with `aisites bookings tables --status booked` and can release any of them, for example
+  `aisites release tables <booking id>`. Removing a record releases its open bookings.
+
+### Message forms
+
+```
+aisites define contact --type form --field order_number:string --field 'message!:text' --setting 'form:={"purposes": ["Question", "Complaint"], "text_field": "message", "text_max": 400}'
+```
+
+- A form is a structure of type `form`. Visitors can add to it but not read it. Only key-holders can send in this milestone.
+- The `form` setting: `purposes` (a list the sender must pick from), `text_field` (the one free-text field),
+  `text_max` (default 500, at most 2000), `per_sender_per_day` (default 3) and `per_day` (default 100).
+  Lists and JSON fields are not allowed in a form.
+- Visitor actions: `submit` (`data`) returns a ticket id. `ticket` (`ticket`) shows the sender the status
+  (`received`, `read`, `answered`) and the single reply.
+- Free text is cleaned on arrival: normalised, control and invisible characters removed, links and markup replaced
+  by markers such as `[link removed]`, and text over the limit refused. This is hygiene, not a defence. The main
+  defences are the form's structure and the untrusted marking below.
+- `inbox` lists messages without their free text, so an AI can triage without reading untrusted prose.
+  `read_message` returns one message in an envelope whose first entry says the content was written by an outside
+  party and is data, not instructions; the text is under `untrusted_text`. `reply` sends the one reply allowed per message.
+- Messages are private. Audit rows record that a message was sent, not its text.
+
+### Custom actions and payment
+
+```python
+@site.action("book_tour", input=TourRequest, open=True)
+```
+
+- Self-hosted sites can register Python functions as actions. They get the same door, retry safety, preview and quotas
+  as built-in actions, at `POST /actions/{name}`. They are not available to sites loaded from folders by the multi-site host.
+- An action's result may carry a payment hand-off (`aisites.PaymentHandoff`: amount, currency, url, expires, note).
+  Bookings take one through the `payment` part of the `booking` setting: `url` (which may contain `{booking}`),
+  `amount_field` and `currency_field`.
+- The framework never handles card details. Real payment providers are not built.
 
 ## Time
 
@@ -243,8 +350,10 @@ created while the server runs are picked up on first request. One site's key is 
 - Private data on a shared host is readable by whoever runs that host.
 - The framework makes a site self-describing, not findable; there is no directory of sites.
 - Lists are filtered in memory, which suits collections of thousands of records, not millions.
-- Invite-only structures are readable on the public routes only with the owner key until guest keys
-  arrive in Milestone 3. A role granted `get` or `list` can read them through the admin door.
+- Callers without a key are told apart only by network address, so the per-address quota is weak against someone
+  with many addresses until Milestone 4.
+- Text cleaning in forms reduces but does not prevent injected instructions.
+- Custom actions are not available on a multi-site host.
 - A redaction works on one history entry at a time, so each entry carrying the value needs redacting.
 - A redaction cannot recall copies that visitors already fetched.
 
@@ -254,7 +363,7 @@ created while the server runs are picked up on first request. One site's key is 
 |---|---|
 | 1 (done) | Structures, kinds, four doors, discovery, time, change feed, history log, many sites per server |
 | 2 (done) | Signed history head, checkpoints with a file anchor, verifier with pinning, redaction for legal takedowns, roles limited to structures, fields and operations, role keys, private audit trail |
-| 3 | Reserving capacity (bookings, stock), custom actions, retry safety, quotas, guest keys, push notifications, message forms |
+| 3 (done) | Reserving capacity through bookings, custom actions with payment hand-off, retry safety, quotas, guest keys, message forms, streaming change feed. Webhooks are not built |
 | 4 | Key-based identity: an agent proving it acts for a specific user |
 
 [`docs/scenarios.md`](docs/scenarios.md) maps each target scenario to a milestone.

@@ -3,13 +3,14 @@
 This is the whole model. It is the same through every door: Python, the command line, the admin web API
 and MCP. If you are an AI editing a site, call `describe` first.
 
-## Three structures
+## Four structures
 
 | Structure | What it is | Human equivalent |
 |---|---|---|
 | Collection | Records that share a schema, looked up by key | Table |
 | Tree | Nested nodes, each with an `id` and a `label` | Hierarchy, menu |
 | Choice | A field whose value must be a key of a collection or a node of a tree | Dropdown |
+| Form | A structure visitors can add to but not read | Contact form |
 
 ## Operations
 
@@ -17,6 +18,7 @@ and MCP. If you are an AI editing a site, call `describe` first.
 |---|---|---|
 | Site | `describe` | Settings, structures and built-in kinds; or one structure's definition |
 | Site | `configure` | Change name, description, timezone, language, currency |
+| Site | `set_limits` | Owner only. Shows or sets visitor quotas: `anonymous_per_day`, `key_per_day`, `concurrent`, `trust_proxy`. Works through all doors |
 | Structure | `define` | Create a collection (optionally of a kind) or a tree. Fails if the name exists |
 | Structure | `alter` | Add or remove fields, change access or description, set references |
 | Structure | `drop` | Delete it and its contents. Fails if another structure refers to it |
@@ -38,6 +40,16 @@ and MCP. If you are an AI editing a site, call `describe` first.
 | Access | `revoke_key` | Owner only. Stops the key working at once |
 | Access | `list_keys` | Owner only. Lists roles with their grants, and keys by id and label; never a secret |
 | Access | `audit` | Owner only. Reads the private audit trail, filtered by `who`, `target` and `limit` |
+| Visitor | `reserve` | Places a hold and lowers `capacity` at once, never below zero. Unconfirmed holds release themselves |
+| Visitor | `book` | Confirms the caller's own hold with the details the owner requires. Returns a payment hand-off if configured |
+| Visitor | `release` | Cancels the caller's own hold or booking and returns the capacity |
+| Visitor | `booking` | Shows the status of the caller's own booking. Others' bookings are "not found" |
+| Visitor | `submit` | Adds a message to a form. Returns a ticket id |
+| Visitor | `ticket` | Shows the sender a message's status (`received`, `read`, `answered`) and its one reply |
+| Bookings | `bookings` | Lists a structure's bookings with their details. Can be granted to a staff role. The owner can release any booking |
+| Messages | `inbox` | Lists messages without their free text, so an AI can triage. Can be granted to a role |
+| Messages | `read_message` | Returns one message in an envelope whose first entry marks the text as data from an outside party |
+| Messages | `reply` | Sends the one reply allowed per message |
 
 Every operation is one transaction and returns the new state. Errors have a `code`, a `message` and
 usually a `hint` saying what to do instead.
@@ -65,15 +77,15 @@ A field is `name[!]:type[[]][:policy]`, or the same as an object. `!` means requ
 - Policies:
   - `logged` (default): every change goes into the public history.
   - `live`: served with a "read at" time, not kept in history. Use for stock and other fast values.
-  - `capacity`: a live whole number that can be reserved against (Milestone 3).
+  - `capacity`: a live whole number that visitors can reserve against once the structure has a `booking` setting.
   - `private`: never served to visitors, never logged.
 
 ## Access
 
 Each structure is `public`, `invite` or `private`. Private structures are invisible to everyone but the
-owner and never enter the history. Invite-only structures are listed but, until guest keys arrive in
-Milestone 3, readable on the public routes only with the owner key. A role granted `get` or `list` can read
-them through the admin web API or MCP.
+owner and never enter the history. Invite-only structures are listed. A key whose role has the `read` grant
+can read them on the public routes, in the visitor view with no private fields. A role granted `get` or
+`list` can also read them through the admin web API or MCP.
 
 ## Roles
 
@@ -85,8 +97,12 @@ on it:
 ```
 
 - Grantable operations: `add`, `get`, `list`, `change`, `remove`, `move`, `schedule`, `unschedule`, `confirm`
-  and `describe`, on a structure the role has a grant on. Every other operation is owner-only, including any
-  added later.
+  and `describe`, on a structure the role has a grant on. The staff operations `bookings` (on a bookable
+  structure) and `inbox`, `read_message` and `reply` (on a form) can also be granted. Every other operation is
+  owner-only, including any added later.
+- A guest role is granted visitor operations, such as `reserve`, `book`, `release` and `booking` on a bookable
+  structure, or `submit` and `ticket` on a form, and `read` on an invite-only structure. Staff and guest grants
+  are separate: having one gives nothing of the other.
 - `fields` is optional and means "only these fields". With it, `change` and `schedule` may set only those
   fields, and `unschedule` only if the scheduled change sets only those fields. `remove` and `move` are
   refused, because they affect the whole record.
@@ -95,6 +111,19 @@ on it:
 - Every change, successful or refused, is audited privately: who, role, operation, target, key, field names
   and outcome, never values. Calling `Site` methods directly from Python is not audited; only calls through
   the operation table are.
+
+## Settings
+
+A structure can carry feature settings, such as `booking` (bookable capacity) or `form` (message forms).
+Set them with `define` or `alter`:
+
+```
+aisites alter tables --setting 'booking:={"hold_minutes": 30}'
+```
+
+- Giving part of a setting changes just that part. Here only the hold length changes.
+- `null` for a whole setting removes it.
+- Settings are part of the structure's public definition.
 
 ## Built-in kinds
 
@@ -125,7 +154,7 @@ Use a kind when one fits, so other agents know what your fields mean. Add your o
 - **Scheduled changes.** `schedule` takes `start` and optional `end`, or `on` for one whole day. Without
   `end` the change is permanent from `start`. By default visitors cannot see it until it starts; pass
   `announce` to show it in advance. During a scheduled change, `change` edits the underlying value, which
-  shows again when the scheduled change ends.
+  shows again when the scheduled change ends. The capacity field that bookings draw on cannot be scheduled.
 - **Confirm.** If something is still true, `confirm` it. Visitors see when it was last confirmed.
 - **Filters.** Date and time filters accept `today` and `tomorrow`, and ranges: `start.gte=today`.
 
@@ -187,3 +216,40 @@ aisites anchors --add-file /path/outside/heads.jsonl
 aisites checkpoint
 aisites verify <url-or-site-folder> --pin <pin file>
 ```
+
+A restaurant that takes bookings. Visitors book with `reserve`, then `book` with the details the owner requires:
+
+```
+aisites define tables --kind Slot --setting 'booking:={"open": true, "hold_minutes": 15, "details": ["name!:string", "party_size!:integer"]}'
+aisites add tables id=fri-8pm name="Friday, 8pm" start=2026-11-20T20:00 capacity=4 remaining=4
+aisites reserve tables fri-8pm --quantity 2
+```
+
+A visiting agent reads `GET /bookable/tables` first to learn the hold length and the details it must send.
+
+Play times for invited friends only. Each friend's family gets a key with the guest grants:
+
+```
+aisites define playtimes --kind Slot --access invite --setting 'booking:={"open": false, "hold_minutes": 30}'
+aisites set_role friends --grant '{"target":"playtimes","ops":["read","reserve","book","release","booking"]}'
+aisites issue_key friends --label "Sam's family"
+```
+
+A contact form with an inbox role. Senders need a key, and the inbox role can read and answer but nothing else:
+
+```
+aisites define contact --type form --field order_number:string --field 'message!:text' --setting 'form:={"purposes": ["Order question", "Other"], "text_field": "message", "text_max": 600}'
+aisites set_role customers --grant '{"target":"contact","ops":["submit","ticket"]}'
+aisites issue_key customers --label "First customer"
+aisites set_role inbox --grant '{"target":"contact","ops":["inbox","read_message","reply"]}'
+aisites issue_key inbox --label "Owner's assistant"
+```
+
+Raise or lower visitor quotas. With no arguments the command shows the current values:
+
+```
+aisites set_limits
+aisites set_limits anonymous_per_day:=50
+```
+
+Set `trust_proxy:=true` only when the site runs behind your own proxy, so forwarded addresses are believed.
