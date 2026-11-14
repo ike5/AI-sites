@@ -30,6 +30,14 @@ and MCP. If you are an AI editing a site, call `describe` first.
 | Time | `unschedule` | Cancel a scheduled change by id |
 | Time | `confirm` | Mark a record as still true now, without changing it |
 | Time | `hours` | Open or closed on a date, as visitors are told |
+| History | `redact` | Owner only. Removes a past value from the public history by `seq`, with optional `fields` and `reason`. Refused while the site still serves the value or a scheduled change has it |
+| History | `checkpoint` | Owner only. Stores the signed head and sends it to each anchor |
+| Access | `set_role` | Owner only. Sets a role's name and grants |
+| Access | `drop_role` | Owner only. Fails while unrevoked keys still use the role |
+| Access | `issue_key` | Owner only. Gives a role key; the secret is shown once |
+| Access | `revoke_key` | Owner only. Stops the key working at once |
+| Access | `list_keys` | Owner only. Lists roles with their grants, and keys by id and label; never a secret |
+| Access | `audit` | Owner only. Reads the private audit trail, filtered by `who`, `target` and `limit` |
 
 Every operation is one transaction and returns the new state. Errors have a `code`, a `message` and
 usually a `hint` saying what to do instead.
@@ -45,7 +53,7 @@ POST /admin/games/schedule   {"key": "GAME-3", "set": {"price": "47.99"}, "on": 
 MCP tool `schedule`          {"target": "games", "key": "GAME-3", "set": {"price": "47.99"}, "on": "2026-12-15"}
 ```
 
-The admin web API and remote MCP (`/mcp`) need `Authorization: Bearer <owner key>`. The command line,
+The admin web API and remote MCP (`/mcp`) accept `Authorization: Bearer <owner key>` or a role key. The command line,
 Python and local MCP (`aisites mcp <folder>`) act on the site folder directly.
 
 ## Fields
@@ -64,7 +72,29 @@ A field is `name[!]:type[[]][:policy]`, or the same as an object. `!` means requ
 
 Each structure is `public`, `invite` or `private`. Private structures are invisible to everyone but the
 owner and never enter the history. Invite-only structures are listed but, until guest keys arrive in
-Milestone 3, readable only with the owner key.
+Milestone 3, readable on the public routes only with the owner key. A role granted `get` or `list` can read
+them through the admin web API or MCP.
+
+## Roles
+
+A role is a name and a list of grants. A grant names a structure (or `*` for all) and the operations allowed
+on it:
+
+```json
+{"target": "games", "ops": ["get", "list", "change", "schedule", "unschedule"], "fields": ["price"]}
+```
+
+- Grantable operations: `add`, `get`, `list`, `change`, `remove`, `move`, `schedule`, `unschedule`, `confirm`
+  and `describe`, on a structure the role has a grant on. Every other operation is owner-only, including any
+  added later.
+- `fields` is optional and means "only these fields". With it, `change` and `schedule` may set only those
+  fields, and `unschedule` only if the scheduled change sets only those fields. `remove` and `move` are
+  refused, because they affect the whole record.
+- A role does not see private fields unless its grant has no field limit or lists the private field.
+- A role's change takes effect immediately. There is no approval step.
+- Every change, successful or refused, is audited privately: who, role, operation, target, key, field names
+  and outcome, never values. Calling `Site` methods directly from Python is not audited; only calls through
+  the operation table are.
 
 ## Built-in kinds
 
@@ -129,4 +159,31 @@ A private calendar:
 aisites define calendar --kind Event --access private
 aisites add calendar title="Bridget" start=2026-11-23T14:00 timezone=America/Los_Angeles
 aisites list calendar start.gte=today start.lt=2026-11-28 --sort start
+```
+
+A product manager who may only change prices. Create the role, then issue the key:
+
+```
+aisites set_role pricing --grant '{"target":"games","ops":["get","list","change","schedule","unschedule"],"fields":["price"]}'
+aisites issue_key pricing --label "Product manager"
+```
+
+A legal takedown. Change the value to its replacement with `change`, then redact the old one. Each history
+entry that carries the value needs its own redaction; find their sequence numbers in
+`GET /collections/{name}/{key}/history`. Redaction is refused while the site still serves the value. The
+reason is public, so write it for readers:
+
+```
+aisites change pages about body="Corrected text"
+aisites redact 37 --fields body --reason "Court order 12/2026"
+```
+
+Let others check your history. Keep an anchor outside the site's control, such as a file in a git repository,
+then checkpoint the signed head. Anyone can verify the history with a pin they keep, and a later run detects a
+rewritten or truncated history:
+
+```
+aisites anchors --add-file /path/outside/heads.jsonl
+aisites checkpoint
+aisites verify <url-or-site-folder> --pin <pin file>
 ```

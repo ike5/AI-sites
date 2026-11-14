@@ -6,8 +6,9 @@ More and more visits to a site come from an AI acting for a person. AI-sites ser
 typed data it can read cheaply, a clear statement of how fresh each fact is, a public history it can look
 back through, and one small set of operations for whoever maintains the site, human or AI.
 
-**Status: Milestone 1 of 4.** Reading, discovery, time, the four editing doors and multi-site hosting work
-and are tested. Verification tooling, roles, actions and identity come next; see [Roadmap](#roadmap).
+**Status: Milestones 1 and 2 of 4.** Reading, discovery, time, the four editing doors and multi-site hosting work
+and are tested. Signed history with a verifier, redaction, and roles with an audit trail now work too. Actions and
+identity come next; see [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -57,6 +58,8 @@ Everything is built from three structures and one set of operations. The full gu
 | Structure | `define`, `alter`, `drop` |
 | Record or node | `add`, `get`, `list`, `change`, `remove`, `move` |
 | Time | `schedule`, `unschedule`, `confirm`, `hours` |
+| History | `redact`, `checkpoint` |
+| Access | `set_role`, `drop_role`, `issue_key`, `revoke_key`, `list_keys`, `audit` |
 
 Structures are defined as data, not code, so an AI can create them and a host can serve many sites
 without running anyone's Python.
@@ -76,7 +79,7 @@ All four call the same function. A test runs one script of operations through ea
 resulting sites to be identical.
 
 For an AI editing a site: `aisites mcp <folder>` serves the tools over stdio; a served site exposes them
-at `/mcp` with the owner key as a bearer token. `GET /admin/ops` describes every operation.
+at `/mcp` with the owner key or a role key as a bearer token. `GET /admin/ops` describes every operation.
 
 ### Shared meaning
 
@@ -94,6 +97,41 @@ prices or hours across sites: `Business`, `Place`, `Hours`, `Closure`, `Notice`,
 
 Each structure is `public`, `invite` or `private`. Private structures are invisible without the owner key.
 
+### Roles and the audit trail
+
+A role is a name with a list of grants. A grant names a structure (or `*` for all), the operations allowed
+on it, and optionally the only fields it may touch:
+
+```json
+{"target": "games", "ops": ["get", "list", "change", "schedule", "unschedule"], "fields": ["price"]}
+```
+
+Roles can be granted `add`, `get`, `list`, `change`, `remove`, `move`, `schedule`, `unschedule`, `confirm`
+and `describe`. Every other operation is for the owner only. With a field list, `change` and `schedule` may
+set only those fields, and `remove` and `move` are refused because they affect the whole record. A role's
+change takes effect at once; there is no approval step.
+
+A product manager who may change only prices:
+
+```
+aisites set_role pricing --grant '{"target":"games","ops":["get","list","change","schedule","unschedule"],"fields":["price"]}'
+aisites issue_key pricing --label "Product manager"
+```
+
+The key's secret starts with `ais_key_`. It is shown once and stored only as a hash. `aisites revoke_key <key id>`
+stops it at once. Role keys work on the admin web API and on `/mcp`.
+
+A change outside the grant is refused with HTTP status 403:
+
+```json
+{"error":{"code":"forbidden","message":"Role 'pricing' may not change field name in 'games'.","hint":"In 'games' it may change only: price."}}
+```
+
+Every operation that changes the site is written to a private audit trail, whether it succeeded or was refused:
+time, who, role, operation, target, record key, the names of the fields set, and the outcome. Values are never
+recorded. `who` is a key id, `owner` or `local`. The trail never appears in the public history, the change feed
+or the manifest. Read it with `aisites audit --who <key id, owner or local> --target <structure> --limit 20`.
+
 ## What a visiting agent gets
 
 | Route | Purpose |
@@ -107,6 +145,8 @@ Each structure is `public`, `invite` or `private`. Private structures are invisi
 | `GET /hours?date=` | Open or closed on a date (`today`, `tomorrow`, `YYYY-MM-DD`) |
 | `GET /changes?since=` | What changed since a cursor |
 | `GET /history`, `/collections/{name}/{key}/history` | Past values, paged; never loaded unless asked for |
+| `GET /history/head` | Current head of the history, signed with the site key; anchor proofs once checkpointed |
+| `GET /history/checkpoints` | Stored checkpoints, paged with `after` and `limit` |
 | `GET /openapi.json` | Generated from the site's structures |
 
 - Reads are never rate limited. Every response has an ETag and answers `If-None-Match` with 304.
@@ -142,6 +182,50 @@ Every change to a public, logged field appends an entry to a hash chain:
   after which the content is revealed and provably dates from when it was planned.
 - `aisites.history.verify_entries` checks a run of entries.
 
+### Verifying
+
+`aisites verify <url-or-site-folder> [--pin FILE]` checks the whole history: each entry's hash and link to the
+one before it, every served value against its commitment, the head's signature, and that the signing key is
+the one recorded in the first entry. It exits with status 1 on any problem and prints a JSON report with `ok`,
+`problems`, `entries`, `sealed`, `redacted`, `head` and `pin`. It detects an altered value, a deleted entry, a
+different signing key, a forged signature, a history rewritten since the pin, and a truncated history.
+
+With `--pin FILE`, it also checks that the head saved by an earlier successful run is still part of the history.
+The file is updated when the check passes. A redaction is not a rewrite, so a pin saved before a redaction still
+verifies. From Python: `aisites.verify.verify_site(fetch, pin=None)`.
+
+### Checkpoints and anchors
+
+`GET /history/head` returns the current head, signed with the site's Ed25519 key. The owner-only `checkpoint`
+operation (`aisites checkpoint`) stores the signed head and sends it to each configured anchor. An anchor is a
+place outside the site's control that receives each checkpoint. The file anchor appends one line per checkpoint
+to a file, for example in a git repository or a synced folder:
+
+```
+aisites anchors --add-file /path/outside/heads.jsonl
+```
+
+`aisites anchors` lists anchors and `--clear` removes them. In Python: `Site(directory, anchors=[...])`. The
+anchor interface is where independent network timestamping will plug in; it is not built yet.
+
+The signature proves that the holder of the site key published the head. It does not prove that the dates in
+the history are true.
+
+### Redaction
+
+`aisites redact 37 --fields description --reason "Court order 12/2026"` removes a past value from the public
+history, for example after a legal takedown. Arguments: the entry's `seq`, optional `fields` and optional
+`reason`. It is owner-only and works through all four doors.
+
+- The entry stays, with a marker: `"redacted": {"description": {"at": "<time>", "by": <seq of the redact entry>}}`.
+  The field is no longer in `values` or `salts`. The chain still verifies, because each hash covers a commitment
+  to the value and not the value itself.
+- A new `redact` entry names the entry and fields. The reason, if given, is public: one line, at most 200
+  characters. The history never says who redacted; the audit trail does.
+- Redaction is refused with `still_current` (HTTP 409) while the site still serves the value or has it in a
+  scheduled change. Change or remove it first. A sealed entry is redacted as a whole and can then never be revealed.
+- The value is also overwritten in the database files on disk, not only removed from what the site serves.
+
 ## Many sites on one server
 
 ```
@@ -153,20 +237,23 @@ created while the server runs are picked up on first request. One site's key is 
 
 ## Limits you should know about
 
-- Without an outside timestamp, dates in the history are the owner's claim (Milestone 2 adds signing and
-  a plug-in point for outside timestamping).
+- The signature proves who published the history, not that its dates are true. Independent timestamping
+  is not built yet.
 - `next_change` does not reveal hidden scheduled changes, so it is a hint, not a guarantee.
 - Private data on a shared host is readable by whoever runs that host.
 - The framework makes a site self-describing, not findable; there is no directory of sites.
 - Lists are filtered in memory, which suits collections of thousands of records, not millions.
-- Invite-only structures need the owner key until guest keys arrive in Milestone 3.
+- Invite-only structures are readable on the public routes only with the owner key until guest keys
+  arrive in Milestone 3. A role granted `get` or `list` can read them through the admin door.
+- A redaction works on one history entry at a time, so each entry carrying the value needs redacting.
+- A redaction cannot recall copies that visitors already fetched.
 
 ## Roadmap
 
 | Milestone | Contents |
 |---|---|
 | 1 (done) | Structures, kinds, four doors, discovery, time, change feed, history log, many sites per server |
-| 2 | Signed history head, checkpoints, verifier, redaction for legal takedowns, roles limited to certain structures and fields |
+| 2 (done) | Signed history head, checkpoints with a file anchor, verifier with pinning, redaction for legal takedowns, roles limited to structures, fields and operations, role keys, private audit trail |
 | 3 | Reserving capacity (bookings, stock), custom actions, retry safety, quotas, guest keys, push notifications, message forms |
 | 4 | Key-based identity: an agent proving it acts for a specific user |
 
