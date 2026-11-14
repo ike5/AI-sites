@@ -29,6 +29,7 @@ POSITIONAL = {
     "remove": ["target", "key"], "move": ["target", "key"], "schedule": ["target", "key"],
     "unschedule": ["target", "key", "schedule"], "confirm": ["target", "key"], "hours": [],
 }
+POSITIONAL["checkpoint"] = []
 # Where an operation's name=value pairs go. None means they are the operation's own arguments.
 PAIRS = {"configure": None, "add": "data", "list": "where", "change": "set", "schedule": "set"}
 # Friendlier option names for a few arguments.
@@ -139,7 +140,7 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__, file=out)
         print("Operations: " + ", ".join(ops.OPS), file=out)
-        print("Other commands: site create, site key, serve, mcp, ops, guide", file=out)
+        print("Other commands: site create, site key, serve, mcp, ops, guide, verify, anchors", file=out)
         return 0
     command, rest = argv[0], argv[1:]
     try:
@@ -168,6 +169,10 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
         if command == "guide":
             print(guide_text(), file=out)
             return 0
+        if command == "verify":
+            return _verify(rest, clock, out)
+        if command == "anchors":
+            return _anchors(rest, clock, out)
         raise SiteError("unknown_command", f"'{command}' is not a command.",
                         "Run `aisites help` for the list.")
     except SiteError as e:
@@ -198,6 +203,59 @@ def _site_command(argv: list, clock: Optional[Callable], out: Any) -> int:
         site = Site(_site_dir(ns.directory), clock)
         _emit({"owner_key": site.new_owner_key(),
                "note": "The previous owner key no longer works."}, out)
+        site.close()
+    return 0
+
+
+# ------------------------------------------------------------ verification and anchors (Milestone 2)
+
+def _verify(argv: list, clock: Optional[Callable], out: Any) -> int:
+    from .verify import local_fetch, url_fetch, verify_site
+
+    p = argparse.ArgumentParser(prog="aisites verify",
+                                description="Check a site's history chain and signed head. Exits 1 on any problem.")
+    p.add_argument("target", help="the site's URL, or a site folder")
+    p.add_argument("--pin", help="JSON file holding the head from an earlier run; updated when the check passes")
+    ns = p.parse_args(argv)
+    pin = None
+    if ns.pin and os.path.exists(ns.pin):
+        try:
+            with open(ns.pin, encoding="utf-8") as f:
+                pin = json.load(f)
+        except ValueError:
+            raise SiteError("invalid", f"The pin file '{ns.pin}' is not valid JSON.",
+                            "Delete it to start a new pin from this run.")
+    if ns.target.startswith(("http://", "https://")):
+        report = verify_site(url_fetch(ns.target), pin)
+    else:
+        site = Site(ns.target, clock)
+        try:
+            report = verify_site(local_fetch(site), pin)
+        finally:
+            site.close()
+    _emit(report, out)
+    if report["ok"] and ns.pin:
+        with open(ns.pin, "w", encoding="utf-8") as f:
+            json.dump(report["pin"], f)
+    return 0 if report["ok"] else 1
+
+
+def _anchors(argv: list, clock: Optional[Callable], out: Any) -> int:
+    p = argparse.ArgumentParser(prog="aisites anchors",
+                                description="Show or set where `checkpoint` sends signed heads.")
+    p.add_argument("-s", "--site", help="site folder (default: $AISITES_SITE or the current folder)")
+    p.add_argument("--add-file", metavar="PATH", action="append",
+                   help="append checkpoints to this file, ideally outside the site's control (repeatable)")
+    p.add_argument("--clear", action="store_true", help="remove all stored anchors first")
+    ns = p.parse_args(argv)
+    site = Site(_site_dir(ns.site), clock)
+    try:
+        items = [] if ns.clear else site.anchor_config()
+        items += [{"type": "file", "path": os.path.abspath(path)} for path in ns.add_file or []]
+        if ns.clear or ns.add_file:
+            site.set_anchor_config(items)
+        _emit({"anchors": site.anchor_config()}, out)
+    finally:
         site.close()
     return 0
 
