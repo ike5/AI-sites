@@ -343,9 +343,11 @@ def _audit(site: Site, principal: Principal, spec: Op, args: Optional[dict], res
             detail["fields"] = sorted(map(str, args[name]))
     if spec.name == "configure":
         detail["fields"] = sorted(k for k in args if k in spec.params)
-    for name in ("schedule", "role", "id"):
+    for name in ("schedule", "role", "id", "seq"):
         if plain(args.get(name)):
             detail[name] = args[name]
+    if spec.name == "redact" and isinstance(args.get("fields"), list):
+        detail["fields"] = sorted(map(str, args["fields"]))
     if spec.name == "issue_key" and isinstance(result, dict):
         detail["id"] = result.get("id")
     if error is not None:

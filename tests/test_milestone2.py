@@ -99,6 +99,8 @@ def test_takedown_end_to_end_keeps_history_verifiable(games, tmp_path):
     _, trail = mcp_call(site, "audit", {})
     who = {(row["op"], row["who"]) for row in trail["entries"] if row["ok"]}
     assert ("redact", "owner") in who and ("checkpoint", "owner") in who
+    redaction = next(row for row in trail["entries"] if row["op"] == "redact" and row["ok"])
+    assert redaction["detail"] == {"seq": seq, "fields": ["description"]}, "the audit says what was removed"
     assert any(op == "change" and w not in ("owner", "local") for op, w in who), "the role key's change is attributed"
     assert SECRET not in json.dumps(trail), "the audit trail records field names, not values"
 
