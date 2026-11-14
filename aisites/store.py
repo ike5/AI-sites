@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE TABLE IF NOT EXISTS bookings (
     id TEXT PRIMARY KEY, collection TEXT NOT NULL, key TEXT NOT NULL, quantity INTEGER NOT NULL,
     status TEXT NOT NULL, caller TEXT NOT NULL, details TEXT NOT NULL DEFAULT '{}', created TEXT NOT NULL,
-    expires TEXT, confirmed TEXT, released TEXT);
+    expires TEXT, confirmed TEXT, released TEXT, reason TEXT);
 CREATE INDEX IF NOT EXISTS bookings_by_record ON bookings (collection, key);
 CREATE INDEX IF NOT EXISTS bookings_by_caller ON bookings (caller, status);
 CREATE TABLE IF NOT EXISTS messages (
