@@ -208,3 +208,16 @@ def test_visitor_features_work_under_a_host_prefix(tmp_path, clock):
     assert http.post("/s/lucia/actions/tables/reserve", json={"key": table},
                      headers={**auth(friend), "Idempotency-Key": "x"}).status_code == 401, \
         "a key for one site is not a key for another"
+
+
+def test_altering_part_of_a_setting_keeps_the_rest(cafe):
+    site, _, _ = cafe
+    before = site.describe("tables")["settings"]["booking"]
+    after = site.alter("tables", settings={"booking": {"hold_minutes": 30}})["settings"]["booking"]
+    assert after == {**before, "hold_minutes": 30}, "the details visitors must give were not dropped"
+    cleared = site.alter("tables", settings={"booking": {"details": None}})["settings"]["booking"]
+    assert cleared["details"] == [] and cleared["hold_minutes"] == 30
+    with pytest.raises(SiteError):
+        site.alter("tables", settings={"booking": {"hold_minutes": 90}})
+    assert site.describe("tables")["settings"]["booking"]["hold_minutes"] == 30, "a refused change changes nothing"
+    assert "settings" not in site.alter("tables", settings={"booking": None})

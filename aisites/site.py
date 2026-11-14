@@ -326,7 +326,10 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         return self.describe(name)
 
     def _apply_settings(self, sdef: StructureDef, settings: Optional[dict]) -> None:
-        """Set or remove feature settings; each is checked by the feature that owns it."""
+        """Set, adjust or remove feature settings; each is checked by the feature that owns it.
+
+        Giving part of a setting changes just that part. null for a whole setting removes it.
+        """
         for name, value in (settings or {}).items():
             if value is None:
                 sdef.settings.pop(name, None)
@@ -335,6 +338,9 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             if check is None:
                 raise SiteError("invalid", f"'{name}' is not a setting.",
                                 "Settings: " + (", ".join(hooks.SETTINGS) or "none") + ".")
+            if isinstance(value, dict) and isinstance(sdef.settings.get(name), dict):
+                # Like `change` on a record: what is given is merged in, and null removes one entry.
+                value = {k: v for k, v in {**sdef.settings[name], **value}.items() if v is not None}
             sdef.settings[name] = check(self, sdef, value)
 
     def alter(self, name: str, add: Optional[list] = None, remove: Optional[list] = None,
