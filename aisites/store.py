@@ -64,6 +64,8 @@ class Store:
         self._depth = 0
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
+        # Deleted content is overwritten with zeros, so a redacted value does not linger in free pages.
+        self.db.execute("PRAGMA secure_delete=ON")
         with self.lock:
             self.db.executescript(SCHEMA)
 
@@ -105,6 +107,12 @@ class Store:
     def set_meta(self, key: str, value: Any) -> None:
         self.x("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                (key, str(value)))
+
+    def scrub(self) -> None:
+        """Fold the write-ahead log into the database and empty it, so no old page survives beside it."""
+        with self.lock:
+            if self._depth == 0:
+                self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def close(self) -> None:
         with self.lock:

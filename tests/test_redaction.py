@@ -313,3 +313,19 @@ def test_through_mcp(shop):
     is_error, result = mcp_call(shop, "redact", {"seq": first})
     assert is_error and result["error"]["code"] == "still_current"
     assert_chain_ok(shop)
+
+
+def test_redacted_value_is_gone_from_the_files_on_disk(site):
+    """Deleting a row is not enough for a takedown: the bytes must not linger in the database files."""
+    secret = "Defamatory-claim-about-a-named-person-7731"
+    site.define("pages", kind="Page")
+    site["pages"].add(slug="about", title="About", body=secret)
+    site["pages"].change("about", body="Replaced text")
+    entry = next(e for e in site.history.entries(limit=1000) if e.get("values", {}).get("body") == secret)
+
+    def on_disk():
+        return any(secret.encode() in f.read_bytes() for f in site.dir.iterdir() if f.name.startswith("site.db"))
+
+    assert on_disk(), "before redaction the history still holds it"
+    site.redact(entry["seq"], ["body"])
+    assert not on_disk()

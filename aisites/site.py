@@ -864,6 +864,7 @@ class Site:
             by = self.history.redact(seq, targets, detail)
             self._change(self.now_z(), row["path"], "history redacted")
             self._bump()
+        self.store.scrub()  # the value must be gone from the files on disk, not just from the tables
         return {"entry": self.history.entry(seq), "redact_seq": by}
 
     # ------------------------------------------------------------ tree operations
