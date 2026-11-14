@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+.venv/
+
+# Site folders hold a database and a private signing key; never commit them.
+sites/
+site.db*
+site.key

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aisites"
+version = "0.1.0"
+description = "A self-hosted framework for sites that are read and used by AI agents."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.6",
+    "cryptography>=42",
+    "mcp>=2.0",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+aisites = "aisites.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aisites*"]
+
+[tool.setuptools.package-data]
+aisites = ["authoring.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
