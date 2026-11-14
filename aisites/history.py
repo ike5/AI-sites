@@ -74,7 +74,10 @@ class History:
         if values:
             entry["values"] = {v["field"]: json.loads(v["value_json"]) for v in values}
             entry["salts"] = {v["field"]: v["salt"] for v in values}
-        if row["op"] == "sealed":
+        redacted = self.store.q("SELECT field, at, by_seq FROM log_redactions WHERE seq=?", (row["seq"],))
+        if redacted:
+            entry["redacted"] = {r["field"]: {"at": r["at"], "by": r["by_seq"]} for r in redacted}
+        if row["op"] == "sealed" and "sealed" not in entry.get("redacted", {}):
             sealed = self.store.one("SELECT reveal_at, inner_json, salt FROM log_sealed WHERE seq=?",
                                     (row["seq"],))
             if sealed and sealed["reveal_at"] and sealed["reveal_at"] <= now_z:
@@ -82,6 +85,28 @@ class History:
                 entry["salt"] = sealed["salt"]
                 entry["revealed_at"] = sealed["reveal_at"]
         return entry
+
+    # ------------------------------------------------------------ redaction
+
+    def redact(self, target: int, fields: list, detail: dict) -> int:
+        """Destroy stored values (or a sealed entry's content) and log the redaction. Returns its seq.
+
+        The hash covers only commitments, so the chain still verifies. Callers check the rules first.
+        """
+        with self.store.tx():
+            row = self.store.one("SELECT op, path FROM log WHERE seq=?", (target,))
+            at = self.now_z()
+            seq = self._append("redact", row["path"], {}, detail)
+            for field in fields:
+                if row["op"] == "sealed":
+                    # The inner path would give the content away, so it goes too.
+                    self.store.x("UPDATE log_sealed SET inner_json='{}', salt='', reveal_at=NULL, path='' "
+                                 "WHERE seq=?", (target,))
+                else:
+                    self.store.x("DELETE FROM log_values WHERE seq=? AND field=?", (target, field))
+                self.store.x("INSERT INTO log_redactions (seq, field, at, by_seq) VALUES (?,?,?,?)",
+                             (target, field, at, seq))
+            return seq
 
     def entry(self, seq: int) -> Optional[dict]:
         row = self.store.one("SELECT * FROM log WHERE seq=?", (seq,))
@@ -128,6 +153,9 @@ def verify_entries(entries: list, prev: str = canon.GENESIS_PREV, start_seq: int
             salt = (e.get("salts") or {}).get(field, "")
             if canon.commit(salt, field, value) != e["commit"].get(field):
                 problems.append(f"{where}: value of '{field}' does not match its commitment")
+        for field in e.get("redacted") or {}:
+            if field not in e.get("commit", {}):
+                problems.append(f"{where}: '{field}' is marked redacted but was never committed")
         if "revealed" in e and canon.commit(e.get("salt", ""), "sealed", e["revealed"]) != e["commit"].get("sealed"):
             problems.append(f"{where}: revealed content does not match its commitment")
         prev, last_time, seq = e.get("hash"), e.get("time", ""), seq + 1
