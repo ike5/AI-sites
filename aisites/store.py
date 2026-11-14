@@ -62,6 +62,7 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self._depth = 0
+        self._scrub_due = False
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=NORMAL")
         # Deleted content is overwritten with zeros, so a redacted value does not linger in free pages.
@@ -87,6 +88,8 @@ class Store:
                 self._depth -= 1
                 if self._depth == 0:
                     self.db.execute("COMMIT")
+                    if self._scrub_due:
+                        self.scrub()
 
     def q(self, sql: str, params: tuple = ()) -> list:
         with self.lock:
@@ -109,10 +112,16 @@ class Store:
                (key, str(value)))
 
     def scrub(self) -> None:
-        """Fold the write-ahead log into the database and empty it, so no old page survives beside it."""
+        """Fold the write-ahead log into the database and empty it, so no old page survives beside it.
+
+        Inside a transaction this waits for the outermost commit; a rollback leaves it due for the next.
+        """
         with self.lock:
-            if self._depth == 0:
-                self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            if self._depth > 0:
+                self._scrub_due = True
+                return
+            self._scrub_due = False
+            self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
     def close(self) -> None:
         with self.lock:
