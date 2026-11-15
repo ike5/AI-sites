@@ -145,7 +145,8 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__, file=out)
         print("Operations: " + ", ".join(ops.OPS), file=out)
-        print("Other commands: site create, site key, serve, mcp, ops, guide, verify, anchors", file=out)
+        print("Other commands: site create, site key, templates, host init, serve, mcp, ops, guide, verify, "
+              "anchors", file=out)
         return 0
     command, rest = argv[0], argv[1:]
     try:
@@ -178,6 +179,12 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
             return _verify(rest, clock, out)
         if command == "anchors":
             return _anchors(rest, clock, out)
+        if command == "host":
+            return _host(rest, clock, out)
+        if command == "templates":
+            from . import templates
+            _emit({"templates": templates.describe()}, out)
+            return 0
         raise SiteError("unknown_command", f"'{command}' is not a command.",
                         "Run `aisites help` for the list.")
     except SiteError as e:
@@ -195,13 +202,20 @@ def _site_command(argv: list, clock: Optional[Callable], out: Any) -> int:
     c.add_argument("--timezone", default="UTC", help="region name, e.g. America/Los_Angeles")
     c.add_argument("--language", default="en")
     c.add_argument("--currency", default="")
+    c.add_argument("--template", default="blank", help="start from a template; see `aisites templates`")
     k = sub.add_parser("key", help="issue a new owner key; the old one stops working")
     k.add_argument("directory", nargs="?")
     ns = p.parse_args(argv)
     if ns.action == "create":
+        from . import templates
+        if ns.template not in templates.TEMPLATES:
+            raise SiteError("bad_template", f"'{ns.template}' is not a template.",
+                            "Templates: " + ", ".join(templates.TEMPLATES) + ".")
         site, owner_key = Site.create(ns.directory, ns.name, ns.description, ns.timezone, ns.language,
                                       ns.currency, clock)
-        _emit({"created": str(site.dir), "site": site.config, "owner_key": owner_key,
+        applied = templates.apply(site, ns.template)
+        _emit({"created": str(site.dir), "site": site.config, "template": applied["template"],
+               "structures": applied["structures"], "owner_key": owner_key,
                "note": "Keep the owner key safe; it is not stored and cannot be shown again."}, out)
         site.close()
     else:
@@ -262,6 +276,62 @@ def _anchors(argv: list, clock: Optional[Callable], out: Any) -> int:
         _emit({"anchors": site.anchor_config()}, out)
     finally:
         site.close()
+    return 0
+
+
+# ------------------------------------------------------------ the hosted service
+
+def _host(argv: list, clock: Optional[Callable], out: Any) -> int:
+    from .platform import Platform
+
+    p = argparse.ArgumentParser(prog="aisites host", description="Run a hosted service on a folder of sites.")
+    sub = p.add_subparsers(dest="action", required=True)
+    i = sub.add_parser("init", help="set a sites folder up as a host, or change its settings")
+    i.add_argument("directory")
+    i.add_argument("--name", help="what the service is called in emails and pages")
+    i.add_argument("--public-url", help="the address people reach it at, e.g. https://sites.example.org")
+    i.add_argument("--sites-per-account", type=int)
+    i.add_argument("--mail-file", metavar="PATH", help="development: write emails to this file instead of sending")
+    i.add_argument("--smtp-host", help="mail server, e.g. smtp.resend.com")
+    i.add_argument("--smtp-port", type=int, default=587)
+    i.add_argument("--smtp-user", default="", help="mail server username, e.g. resend")
+    i.add_argument("--smtp-sender", help="the From address, on a domain your mail provider has verified")
+    i.add_argument("--smtp-tls", default="starttls", choices=["starttls", "ssl", "none"])
+    for action in ("suspend", "unsuspend"):
+        s = sub.add_parser(action, help=f"{action} a site created through sign-up")
+        s.add_argument("directory")
+        s.add_argument("site")
+    a = sub.add_parser("accounts", help="list accounts (by fingerprint) and their sites")
+    a.add_argument("directory")
+    ns = p.parse_args(argv)
+    if ns.action == "init":
+        mail_config = None
+        if ns.mail_file:
+            mail_config = {"type": "file", "path": os.path.abspath(ns.mail_file)}
+        elif ns.smtp_host:
+            from .mail import SmtpMailer
+            SmtpMailer(ns.smtp_host, ns.smtp_sender or "", ns.smtp_port, ns.smtp_user, tls=ns.smtp_tls)
+            mail_config = {"type": "smtp", "host": ns.smtp_host, "port": ns.smtp_port, "username": ns.smtp_user,
+                           "sender": ns.smtp_sender, "tls": ns.smtp_tls}
+        platform = Platform.init(ns.directory, clock, name=ns.name, public_url=ns.public_url,
+                                 sites_per_account=ns.sites_per_account, mail=mail_config)
+        shown = dict(platform.config)
+        note = "Serve it with: aisites serve --sites " + str(ns.directory)
+        if shown["mail"].get("type") == "smtp":
+            note += ". Provide the mail password in the AISITES_SMTP_PASSWORD environment variable."
+        elif not shown["mail"]:
+            note += ". No mail is set up yet, so nobody can sign in: add --smtp-host or --mail-file."
+        _emit({"host": str(ns.directory), "settings": shown, "note": note}, out)
+        platform.close()
+        return 0
+    platform = Platform(ns.directory, clock)
+    try:
+        if ns.action == "accounts":
+            _emit({"accounts": platform.accounts()}, out)
+        else:
+            _emit(platform.suspend(ns.site, ns.action == "suspend"), out)
+    finally:
+        platform.close()
     return 0
 
 

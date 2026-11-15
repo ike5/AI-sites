@@ -3,6 +3,9 @@
 Each site is a folder holding its own database and key. A site is reached at /s/<name>/, or at its own
 hostname when `hosts.json` in the sites folder maps one to it, e.g. {"school.example.org": "school"}.
 Sites are loaded on first request, so one created while the server runs is picked up without a restart.
+
+Once the folder has been set up with `aisites host init`, every other address is answered by the hosted
+service (sign-up, account pages, site creation); see `platform.py`. Without that, nothing changes.
 """
 
 import json
@@ -18,11 +21,25 @@ SITE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
 
 
 class Host:
-    def __init__(self, sites_dir: Any, clock: Any = None):
+    def __init__(self, sites_dir: Any, clock: Any = None, mailer: Any = None):
         self.dir = Path(sites_dir)
         self.clock = clock
+        self.mailer = mailer
         self._apps: dict = {}
         self._lock = threading.Lock()
+        self._platform: Any = None
+        self._platform_app: Any = None
+
+    @property
+    def platform(self) -> Any:
+        """The hosted service for this folder, or None if the folder was never set up as a host."""
+        from .platform import Platform
+        with self._lock:
+            if self._platform is None and Platform.enabled(self.dir):
+                from .platform_web import create_platform_app
+                self._platform = Platform(self.dir, self.clock, self.mailer)
+                self._platform_app = create_platform_app(self._platform)
+            return self._platform
 
     def names(self) -> list:
         return sorted(p.name for p in self.dir.iterdir() if (p / "site.db").exists()) if self.dir.exists() else []
@@ -67,6 +84,16 @@ class Host:
         else:
             hostname = dict(scope.get("headers") or []).get(b"host", b"").decode().split(":")[0].lower()
             name = self._by_hostname(hostname)
+        platform = self.platform
+        if name is None and platform is not None:
+            return await self._platform_app(scope, receive, send)
+        if name and platform is not None and platform.is_suspended(name):
+            body = json.dumps({"error": {"code": "suspended",
+                                         "message": "This site has been suspended by its host."}}).encode()
+            await send({"type": "http.response.start", "status": 403,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body", "body": body})
+            return
         app = self.app_for(name) if name else None
         if app is None:
             body = json.dumps({"error": {

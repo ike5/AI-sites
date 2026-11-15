@@ -75,7 +75,7 @@ CREATE INDEX IF NOT EXISTS messages_by_caller ON messages (caller, created);
 
 
 class Store:
-    def __init__(self, path: str):
+    def __init__(self, path: str, schema: str = SCHEMA):
         self.path = path
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None, timeout=30)
         self.db.row_factory = sqlite3.Row
@@ -87,7 +87,7 @@ class Store:
         # Deleted content is overwritten with zeros, so a redacted value does not linger in free pages.
         self.db.execute("PRAGMA secure_delete=ON")
         with self.lock:
-            self.db.executescript(SCHEMA)
+            self.db.executescript(schema)
 
     @contextmanager
     def tx(self):
