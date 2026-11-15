@@ -26,8 +26,8 @@ label { display: block; margin: 12px 0 4px; color: var(--muted); }
 input, select { font: inherit; padding: 8px 10px; width: 100%; max-width: 420px; box-sizing: border-box;
   border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
 button { font: inherit; padding: 8px 14px; margin-top: 14px; border: 1px solid var(--line); border-radius: 6px;
-  background: var(--fg); color: var(--bg); cursor: pointer; }
-button.quiet { background: transparent; color: var(--fg); margin-top: 0; padding: 4px 10px; }
+  background: var(--fg); color: var(--bg); cursor: pointer; display: block; }
+button.quiet { background: transparent; color: var(--fg); margin-top: 0; padding: 4px 10px; display: inline-block; }
 h2 { font-size: 1.1rem; margin: 28px 0 8px; }
 .phrase { font: 600 1.4rem ui-monospace, monospace; padding: 10px 14px; border: 1px solid var(--line);
   border-radius: 6px; display: inline-block; }
