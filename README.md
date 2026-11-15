@@ -354,7 +354,8 @@ aisites host init ./sites --name "Sitewise" --public-url http://localhost:8000 -
 aisites serve --sites ./sites
 ```
 
-People sign up by email with a six-digit code, create a site from a template, and connect their own AI. Use
+People sign up by email with a six-digit code, create a site from a template, and connect their own AI. An
+assistant that uses a sign-in flow needs only the site's `mcp` address. Use
 `--mail-file` for development; real mail needs the `--smtp-*` options. The details are in
 [`docs/hosting.md`](docs/hosting.md).
 
@@ -386,8 +387,9 @@ People sign up by email with a six-digit code, create a site from a template, an
 
 ### Hosted service
 
-- Done: sign-up by email, templates, account keys, owner-key recovery, suspension.
-- Next: the sign-in flow for assistants that cannot send a key in a header.
+- Done: sign-up by email, templates, account keys, owner-key recovery, suspension, and the sign-in flow for
+  assistants that cannot send a key in a header ([`docs/hosting.md`](docs/hosting.md)).
+- Next: passkeys for signing in to the account page.
 - Later: billing, custom domains, a built-in assistant.
 
 [`docs/scenarios.md`](docs/scenarios.md) maps each target scenario to a milestone.

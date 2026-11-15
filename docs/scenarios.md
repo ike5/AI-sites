@@ -20,7 +20,8 @@ designed; if it cannot be, that gap is the thing to discuss.
 | A child's play times, readable only by invited friends' AIs | 3 | `invite` access, guest key with `read` and booking grants | `examples/hangout.py` | `test_hangout_needs_a_friends_key` |
 | A visitor's AI sends the owner a message | 3 (key-holders) | `form` structure, one cleaned text field, `inbox` without text, untrusted envelope, inbox role, single reply | `examples/contact_form.py` | `test_visiting_agent_flow` |
 | An agent is told when something changes (snow day, service disruption) | 3 | `/changes/stream` (server-sent events) on top of `/changes` | — | `test_change_made_while_open_is_delivered` |
-| Someone signs up on a host and gets a site their own AI builds | Hosted service | Email one-time code, AI-started registration with a pairing phrase, templates, account key, owner-key recovery | — | `test_ai_starts_registration_and_person_confirms` |
+| Someone signs up on a host and gets a site their own AI builds | Hosted service | Email one-time code, AI-started sign-up, templates, account key, owner-key recovery | — | `test_ai_starts_registration_and_person_confirms` |
+| An assistant that only accepts a sign-in flow connects to a site | Hosted service | Standard sign-in flow (OAuth 2.1), approval page, one site per connection, Disconnect | — | `test_whole_flow_from_a_person_who_is_not_signed_in` |
 
 ## Planned
 
@@ -29,7 +30,6 @@ designed; if it cannot be, that gap is the thing to discuss.
 | An agent changes a user's account on their behalf | 4 | Key-based identity with a signed, time-limited permission |
 | A stranger's AI sends the owner a message | 4 | Key-based identity, approved contacts, one fixed-form contact request |
 | Payment for a booking or purchase | 3 (hand-off, delivered), later (providers) | Action returns a payment hand-off; the framework never sees card data |
-| An assistant that only accepts a sign-in flow connects to a site | Hosted service, next | Standard sign-in flow with the account page as the consent screen |
 
 ## Later, not yet scheduled
 

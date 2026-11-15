@@ -58,23 +58,96 @@ A person signs up on the account page:
 
 An AI can start the sign-up for a person:
 
-1. The AI calls `POST /register` with the person's email address.
-2. The host emails the person a code. The email names the pairing phrase and the confirmation address.
-3. The AI tells the person the pairing phrase and where to confirm.
-4. The person opens the confirmation page, checks that it shows the same phrase, and enters the code. The page
-   says that confirming gives that assistant a key to create and manage their sites.
-5. The AI calls `GET /register/{ticket}` with its claim as the bearer token. It gets 202 `pending` until the
+1. The AI calls `POST /signup` with the person's email address.
+2. The host emails the person a six-digit code and the address of the confirmation page.
+3. The AI tells the person to open that page (the `confirm_at` address in the answer) and enter the code.
+4. The person opens the page. It says that confirming gives that assistant a key to create and manage their
+   sites. The person enters the code.
+5. The AI calls `GET /signup/{ticket}` with its claim as the bearer token. It gets 202 `pending` until the
    person confirms, then 200 with an `account_key`, once. A second collection is refused.
 6. The AI creates a site with `POST /sites`, using the account key.
 
-The pairing phrase protects against someone else's assistant registering your address and you confirming by
-reflex. A registration expires after 15 minutes. A code mailed for an assistant cannot sign a browser in, and a
-browser sign-in code cannot confirm an assistant.
+Only someone who can read the email gets the code, and the email and the page both say what confirming grants.
+If the person did not ask an assistant to do this, they should do nothing. A registration expires after 15
+minutes. A code mailed for an assistant cannot sign a browser in, and a browser sign-in code cannot confirm an
+assistant.
 
 To connect an AI to a new site, add the site's `mcp` address as a connector and send the owner key as the header
 `Authorization: Bearer <owner key>`. Call the `describe` tool first. An AI that uses the web API instead can `GET`
 the site's `admin` address, which lists every operation, and call `POST /admin/{target}/{op}` with the same
 header.
+
+## Connecting an assistant that uses a sign-in flow
+
+Some assistants, ChatGPT on the web for example, cannot send a key in a header. They connect through a standard
+sign-in flow instead (OAuth 2.1, as the Model Context Protocol specifies it).
+
+The person gives the assistant only the site's MCP address: `https://<host>/s/<name>/mcp`. The assistant sends
+the person to the host. The person signs in with their emailed code and sees a page that names the assistant,
+where it will return to, and the site. They press Allow or Deny.
+
+Allow gives that assistant full control of that one site, the same power as the site's owner key. It gets no
+access to the person's other sites or their account. If the assistant names no site, the person chooses one of
+their own sites on the page.
+
+The assistant's name on the page is the assistant's own claim, and the host cannot check it. The address the
+assistant returns to is checked against the one it registered.
+
+### Managing it
+
+- The account page has a "Connected assistants" list: name, site, when connected, when last used, and a
+  Disconnect button. Disconnect stops the assistant at once.
+- Changes made by a connected assistant appear in the site's private audit trail as `assistant:<connection id>`,
+  with the role `owner`.
+- Suspending a site stops its connected assistants too.
+
+### What the host must have
+
+- The flow is on only when the host's public address (`--public-url` of `aisites host init`) is an `https://`
+  address with no path. `http://localhost:<port>` and `http://127.0.0.1:<port>` also work, for trying it out.
+  Otherwise the flow is off. `aisites host init` says so, and sites keep working with keys in a header.
+- Changing the public address needs a restart of `aisites serve`.
+- A self-hosted single site (served without `--sites`) is unchanged: keys in a header, no sign-in flow.
+- The flow works at a site's `/s/<name>/mcp` address on the host's public address. It is not offered on a site's
+  own hostname mapped through `hosts.json`.
+
+### Lifetimes
+
+| Item | Lifetime |
+|---|---|
+| Approval request | 10 minutes |
+| Authorization code | 2 minutes, works once |
+| Access token | 1 hour |
+| Refresh token | Replaced every time it is used. Lapses after 30 days without use. An assistant that did not ask to renew gets none |
+
+Tokens and codes are stored only as hashes.
+
+### Endpoints
+
+| Route | Purpose |
+|---|---|
+| `GET /.well-known/oauth-authorization-server` | The host's discovery document |
+| `GET /.well-known/oauth-protected-resource/s/{name}/mcp` | Tells an assistant which host signs people in for that site |
+| `GET /authorize` | Where the assistant sends the person. Leads to the approval page |
+| `POST /token` | The assistant exchanges its code for a token, or renews one |
+| `POST /register` | The assistant registers itself, with its name and return addresses. At most 20 an hour per network address. Registrations never used are removed after 7 days |
+| `POST /revoke` | The assistant ends its own connection |
+| `GET /account/authorize?request=...` | For the person: the approval page |
+
+An unauthenticated request to a site's MCP address gets 401 with a `WWW-Authenticate` header that names the
+site's discovery document. That is how an assistant finds the flow.
+
+### Assistants identified by an address
+
+An assistant may identify itself by the `https://` address of a document it publishes, instead of registering.
+The host fetches that document with these guards: https only, public network addresses only, no redirects
+followed, a 5 second limit, a 64 KB limit, and the document must name the same address. The result is kept for
+a day.
+
+The operator can turn this off with `aisites host init <folder> --client-metadata-urls off`.
+
+Known limit: the fetch connects directly and does not use an outbound proxy. On a server that reaches the
+internet only through a proxy, these assistants cannot be identified this way. Self-registration still works.
 
 ## Routes
 
@@ -85,10 +158,10 @@ The host serves these at its root, beside the sites at `/s/<name>/`.
 | `GET /` | What this host is and how to register, as JSON |
 | `GET /llms.txt` | The same, as Markdown |
 | `GET /templates` | The templates, with descriptions |
-| `GET /account` | For people: sign in; then list your sites, create one, issue a new owner key for a site, issue or revoke account keys, sign out |
-| `POST /register` | For an AI: starts registration with `{"email": "..."}`. The answer has `ticket`, `claim`, `pairing_phrase`, `confirm_at`, `collect_at`, `expires`, and a sentence to tell the person |
-| `GET /account/confirm?ticket=...` | For the person: shows the pairing phrase and takes the emailed code |
-| `GET /register/{ticket}` | For the AI, with `Authorization: Bearer <claim>`: 202 `pending`, then 200 with `account_key` (starts `ais_acct_`), once |
+| `GET /account` | For people: sign in; then list your sites, create one, issue a new owner key for a site, issue or revoke account keys, disconnect connected assistants, sign out |
+| `POST /signup` | For an AI: starts sign-up with `{"email": "..."}`. The answer has `ticket`, `claim`, `expires`, `confirm_at`, `collect_at`, `tell_the_person`, and `next` |
+| `GET /account/confirm?ticket=...` | For the person: takes the emailed code |
+| `GET /signup/{ticket}` | For the AI, with `Authorization: Bearer <claim>`: 202 `pending`, then 200 with `account_key` (starts `ais_acct_`), once |
 | `GET /sites`, `POST /sites` | With `Authorization: Bearer <account key>`: list your sites; create one |
 | `POST /sites/{name}/key` | With an account key: issue a new owner key for one of your sites. The old one stops working |
 
@@ -119,7 +192,7 @@ Templates also work when self-hosting: `aisites site create ./school --name "Lin
 `aisites templates` lists them.
 
 A site name is 3 to 63 lowercase letters, digits, `-` or `_`, starting with a letter or digit. Some names are
-reserved, for example `account`, `register`, `sites` and `templates`.
+reserved, for example `account`, `register`, `signup`, `authorize`, `token`, `revoke`, `sites` and `templates`.
 
 ## Running it
 
@@ -161,7 +234,12 @@ Files in the sites folder:
 - The operator cannot email site owners, because only a fingerprint of each address is stored.
 - An account key can create and manage all of its account's sites. It is shown once. It can be revoked on the
   account page, and it stops working at once.
-- An assistant that accepts only a sign-in flow, and cannot send a key in a header, cannot connect yet. That flow
-  is the next step and is not built.
+- The sign-in flow for assistants has been tested with the MCP library's own client, which follows the same
+  standard, and with a real browser playing the person. It has not been tested against the real ChatGPT or Claude
+  apps. Check the first real connection on a public host.
+- The sign-in flow needs the host to be reachable over HTTPS at its public address.
+- A connected assistant has the same power over that site as the owner key, until it is disconnected. There is
+  not yet a way to connect an assistant with a limited role.
+- Sign-in is still an emailed code. Passkeys are the next step; Google or Apple sign-in is planned after that.
 - Not built: a built-in assistant; billing and plans; custom domain and TLS set-up (the existing `hosts.json`
   mapping still applies); sign-in for visitors in a browser.
