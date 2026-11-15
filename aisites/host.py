@@ -47,11 +47,16 @@ class Host:
     def app_for(self, name: str) -> Optional[Any]:
         if not SITE_NAME.match(name):
             return None
+        platform = self.platform
         with self._lock:
             if name not in self._apps:
                 if not (self.dir / name / "site.db").exists():
                     return None
-                self._apps[name] = create_app(Site(self.dir / name, self.clock))
+                site = Site(self.dir / name, self.clock)
+                if platform is not None:
+                    # Tokens from the host's sign-in flow for assistants count on this site.
+                    site.token_resolver = lambda token, n=name: platform.connections.principal_for(token, n)
+                self._apps[name] = create_app(site)
             return self._apps[name]
 
     def _by_hostname(self, hostname: str) -> Optional[str]:
@@ -78,7 +83,8 @@ class Host:
         root = scope.get("root_path", "")
         name = None
         parts = path[len(root):].split("/")
-        if len(parts) >= 3 and parts[1] == "s":
+        by_path = len(parts) >= 3 and parts[1] == "s"
+        if by_path:
             name = parts[2]
             root = f"{root}/s/{name}"
         else:
@@ -106,6 +112,8 @@ class Host:
             return
         child = dict(scope)
         child["root_path"] = root
+        if by_path and platform is not None and platform.connections.available():
+            child["aisites.resource_metadata"] = platform.connections.resource_metadata_url(name)
         if path == root:  # /s/name with no trailing slash
             child["path"] = root + "/"
         await app(child, receive, send)

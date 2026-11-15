@@ -71,8 +71,12 @@ class McpHttp:
             body = json.dumps(SiteError(
                 "needs_key", "The MCP door needs the site owner's key or a role key.",
                 "Send it as: Authorization: Bearer <key>").as_dict()).encode()
+            # A host that offers a sign-in flow for assistants says where this door's discovery document is.
+            found = scope.get("aisites.resource_metadata")
+            challenge = f'Bearer resource_metadata="{found}"' if found else "Bearer"
             await send({"type": "http.response.start", "status": 401,
-                        "headers": [(b"content-type", b"application/json"), (b"www-authenticate", b"Bearer")]})
+                        "headers": [(b"content-type", b"application/json"),
+                                    (b"www-authenticate", challenge.encode())]})
             await send({"type": "http.response.body", "body": body})
             return
         manager = StreamableHTTPSessionManager(

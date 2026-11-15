@@ -52,6 +52,23 @@ CREATE TABLE IF NOT EXISTS account_keys (
 CREATE TABLE IF NOT EXISTS sites (
     name TEXT PRIMARY KEY, account TEXT NOT NULL, template TEXT NOT NULL, created TEXT NOT NULL,
     suspended INTEGER NOT NULL DEFAULT 0);
+
+-- The sign-in flow for assistants (oauth.py). A connection is one approved assistant on one site.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id TEXT PRIMARY KEY, info TEXT NOT NULL, created TEXT NOT NULL, used TEXT);
+CREATE TABLE IF NOT EXISTS oauth_requests (
+    id TEXT PRIMARY KEY, client_id TEXT NOT NULL, client_name TEXT NOT NULL, params TEXT NOT NULL,
+    site TEXT, expires TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash TEXT PRIMARY KEY, client_id TEXT NOT NULL, client_name TEXT NOT NULL, account TEXT NOT NULL,
+    site TEXT NOT NULL, params TEXT NOT NULL, expires TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS oauth_connections (
+    id TEXT PRIMARY KEY, account TEXT NOT NULL, site TEXT NOT NULL, client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL, created TEXT NOT NULL, last_used TEXT, revoked TEXT);
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, connection TEXT NOT NULL, scopes TEXT NOT NULL,
+    resource TEXT NOT NULL, expires TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS oauth_tokens_by_connection ON oauth_tokens (connection);
 """
 
 SITE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{2,62}$")
@@ -64,7 +81,9 @@ TICKET_MINUTES = 15
 SESSION_DAYS = 30
 CODES_PER_EMAIL_PER_HOUR = 5
 CODES_PER_ADDRESS_PER_HOUR = 20
-DEFAULTS = {"name": "AI-sites host", "public_url": "", "sites_per_account": 3, "mail": {}}
+DEFAULTS = {"name": "AI-sites host", "public_url": "", "sites_per_account": 3, "mail": {},
+            # Let an assistant identify itself by the address of a document it publishes (fetched by this host).
+            "client_metadata_urls": True}
 
 
 def _sha(text: str) -> str:
@@ -81,6 +100,7 @@ class Platform:
         self.clock = clock or (lambda: datetime.now(timeview.UTC))
         self._secret = (self.dir / "platform.key").read_bytes()
         self._mailer = mailer
+        self._connections: Any = None
 
     # ------------------------------------------------------------ set-up
 
@@ -120,6 +140,14 @@ class Platform:
         config["public_url"] = str(config["public_url"]).rstrip("/")
         (self.dir / "platform.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
         return config
+
+    @property
+    def connections(self) -> Any:
+        """The sign-in flow for assistants (oauth.py): approvals, tokens and connected assistants."""
+        if self._connections is None:
+            from .oauth import Connections
+            self._connections = Connections(self)
+        return self._connections
 
     @property
     def mailer(self) -> Any:
@@ -386,6 +414,9 @@ class Platform:
             "connect_your_ai": [
                 "MCP: add the `mcp` address as a connector and send the owner key as the header "
                 "Authorization: Bearer <owner key>. Call the `describe` tool first.",
+                *(["MCP with a sign-in flow (assistants that do not take a key): add the `mcp` address alone. "
+                   "The assistant sends the person here to sign in and approve it for this site."]
+                  if self.connections.available() else []),
                 "Web API: GET the `admin` address lists every operation; POST /admin/{target}/{op} with the "
                 "same header.",
                 "Authoring guide: run `aisites guide`, or read aisites/authoring.md.",
@@ -451,6 +482,14 @@ class Platform:
             "templates": self.link("/templates"), "sites": self.link("/sites"),
             "sites_live_at": self.link("/s/<name>/"), "sites_per_account": self.config["sites_per_account"],
             "sign_in": "A one-time code by email. No passwords.",
+            "connecting_an_assistant": (
+                "An assistant that connects through a sign-in flow needs only a site's MCP address, "
+                + self.link("/s/<name>/mcp") + ". It is sent here, the person signs in and approves, and it "
+                "receives a token for that one site. Assistants that take a key in a header can use the "
+                "site's owner key instead."
+                if self.connections.available() else
+                "Give the assistant the site's MCP address and its owner key, sent as Authorization: Bearer "
+                "<owner key>. The sign-in flow for assistants needs this host to have an https address."),
         }
 
     def close(self) -> None:

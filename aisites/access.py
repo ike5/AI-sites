@@ -26,6 +26,10 @@ class AccessMixin:
     # Roles, keys and audit rows are private bookkeeping: nothing here touches the public history, the
     # change feed or the manifest. The permission check itself lives in `ops.run`.
 
+    # Set by a host (host.py) so that tokens it issued through its sign-in flow are recognised here.
+    # Takes the token and returns a Principal or None. A site served on its own never has one.
+    token_resolver: Any = None
+
     def resolve(self, token: Optional[str]) -> Optional["Principal"]:
         """Who a bearer token belongs to: the owner, an unrevoked role key, or nobody (None)."""
         from .ops import OWNER, Principal
@@ -34,7 +38,9 @@ class AccessMixin:
         if self.check_owner(token):
             return OWNER
         row = self.store.one("SELECT id, role FROM keys WHERE hash=? AND revoked IS NULL", (_hash_key(token),))
-        return Principal("role", row["id"], row["role"]) if row else None
+        if row:
+            return Principal("role", row["id"], row["role"])
+        return self.token_resolver(token) if self.token_resolver else None
 
     def _grant_choices(self) -> str:
         return ", ".join(grantable())

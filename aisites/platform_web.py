@@ -6,9 +6,10 @@ server-rendered, need no JavaScript, and exist as the fallback for people.
 
 import hmac
 import json
+import re
 from html import escape
 from typing import Any, Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -20,6 +21,7 @@ from .errors import SiteError
 from .platform import SESSION_DAYS, Platform
 
 COOKIE = "aisites_session"
+NEXT = re.compile(r"^req_[A-Za-z0-9_-]{10,60}$")
 FORM_STYLE = """
 form { margin: 0 0 20px; }
 label { display: block; margin: 12px 0 4px; color: var(--muted); }
@@ -28,6 +30,11 @@ input, select { font: inherit; padding: 8px 10px; width: 100%; max-width: 420px;
 button { font: inherit; padding: 8px 14px; margin-top: 14px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--fg); color: var(--bg); cursor: pointer; display: block; }
 button.quiet { background: transparent; color: var(--fg); margin-top: 0; padding: 4px 10px; display: inline-block; }
+.choice { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.choice button { margin-top: 0; }
+.choice button.quiet { padding: 8px 14px; }
+.claim { overflow-wrap: anywhere; }
+form.end { margin-top: 28px; }
 h2 { font-size: 1.1rem; margin: 28px 0 8px; }
 .secret { font: 0.95rem ui-monospace, monospace; padding: 10px 14px; border: 1px solid var(--line);
   border-radius: 6px; overflow-wrap: anywhere; }
@@ -42,7 +49,10 @@ def _page(platform: Platform, title: str, body: str, status: int = 200) -> HTMLR
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
         f"<title>{escape(title)}</title><style>{html.STYLE}{FORM_STYLE}</style></head><body><main>"
         f"<h1>{escape(title)}</h1><p class='note'>{escape(platform.config['name'])}</p>{body}</main></body></html>",
-        status_code=status, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+        status_code=status, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+                                     # These pages hold approve buttons: never let another page frame them.
+                                     "X-Frame-Options": "DENY",
+                                     "Content-Security-Policy": "frame-ancestors 'none'"})
 
 
 def create_platform_app(platform: Platform) -> FastAPI:
@@ -182,6 +192,16 @@ def create_platform_app(platform: Platform) -> FastAPI:
     def hidden(session: dict) -> str:
         return f"<input type='hidden' name='csrf' value='{escape(session['csrf'], quote=True)}'>"
 
+    def next_field(data: Any) -> str:
+        """Carry an approval request through sign-in. Only a request id is carried, never an address."""
+        wanted = str(data.get("next", ""))
+        return f"<input type='hidden' name='next' value='{wanted}'>" if NEXT.match(wanted) else ""
+
+    def sign_in_form(here: str, carry: str = "") -> str:
+        return (f"<form method='post' action='{here}/account/code'>{carry}"
+                + field("email", "Email address", "email", extra="required autocomplete='email'")
+                + "<button>Send me a code</button></form>")
+
     def shown_once(title: str, intro: str, secret: str, rows: dict, here: str) -> str:
         details = "".join(f"<dt>{escape(k)}</dt><dd>{escape(str(v))}</dd>" for k, v in rows.items())
         return (f"<p>{escape(intro)}</p><p class='secret'>{escape(secret)}</p>"
@@ -195,9 +215,7 @@ def create_platform_app(platform: Platform) -> FastAPI:
         if session is None:
             body = ("<p>Sign in or sign up with your email address. We send a one-time code; there is no "
                     "password. The address is used to send the code and is not kept in readable form.</p>"
-                    f"<form method='post' action='{here}/account/code'>"
-                    + field("email", "Email address", "email", extra="required autocomplete='email'")
-                    + "<button>Send me a code</button></form>")
+                    + sign_in_form(here))
             return _page(platform, "Sign in", body)
         sites = platform.sites(session["account"])
         rows = "".join(
@@ -214,6 +232,12 @@ def create_platform_app(platform: Platform) -> FastAPI:
                f"<td><form method='post' action='{here}/account/keys/{escape(k['id'], quote=True)}/revoke'>"
                f"{hidden(session)}<button class='quiet'>Revoke</button></form></td>") + "</tr>"
             for k in platform.account_keys(session["account"]))
+        connected = "".join(
+            f"<tr><td class='claim'>{escape(c['assistant'])}</td><td>{escape(c['site'])}</td>"
+            f"<td>{escape(c['connected'])}</td><td>{escape(c['last_used'] or 'not yet')}</td>"
+            f"<td><form method='post' action='{here}/account/connections/{escape(c['id'], quote=True)}/disconnect'>"
+            f"{hidden(session)}<button class='quiet'>Disconnect</button></form></td></tr>"
+            for c in platform.connections.connections(session["account"]))
         body = (
             "<h2>Your sites</h2>"
             + (f"<div class='scroll'><table><thead><tr><th>Site</th><th>Template</th><th>Created</th>"
@@ -230,7 +254,13 @@ def create_platform_app(platform: Platform) -> FastAPI:
             + (f"<div class='scroll'><table><tbody>{keys}</tbody></table></div>" if keys else "")
             + f"<form method='post' action='{here}/account/keys'>{hidden(session)}"
             + field("label", "What is this key for?") + "<button>Issue a key</button></form>"
-            f"<form method='post' action='{here}/account/signout'>{hidden(session)}"
+            "<h2>Connected assistants</h2><p class='note'>Assistants you approved through their sign-in flow. "
+            "Each has full control of the one site shown, until you disconnect it. The name is what the "
+            "assistant called itself.</p>"
+            + (f"<div class='scroll'><table><thead><tr><th>Assistant</th><th>Site</th><th>Connected</th>"
+               f"<th>Last used</th><th></th></tr></thead><tbody>{connected}</tbody></table></div>" if connected
+               else "<p class='note'>None.</p>")
+            + f"<form class='end' method='post' action='{here}/account/signout'>{hidden(session)}"
             "<button class='quiet'>Sign out</button></form>")
         return _page(platform, "Your account", body)
 
@@ -239,7 +269,7 @@ def create_platform_app(platform: Platform) -> FastAPI:
         data = await form_of(request)
         await run_in_threadpool(platform.send_code, data.get("email", ""), address(request))
         body = ("<p>If that address can receive mail, a six-digit code is on its way. It is valid for ten "
-                f"minutes.</p><form method='post' action='{base(request)}/account/session'>"
+                f"minutes.</p><form method='post' action='{base(request)}/account/session'>{next_field(data)}"
                 f"<input type='hidden' name='email' value='{escape(data.get('email', ''), quote=True)}'>"
                 + field("code", "Code", extra="required inputmode='numeric' autocomplete='one-time-code'")
                 + "<button>Sign in</button></form>")
@@ -249,7 +279,9 @@ def create_platform_app(platform: Platform) -> FastAPI:
     async def start_session(request: Request):
         data = await form_of(request)
         session = await run_in_threadpool(platform.sign_in, data.get("email", ""), data.get("code", ""))
-        response = RedirectResponse(base(request) + "/account", status_code=303)
+        wanted = str(data.get("next", ""))
+        after = "/account/authorize?request=" + wanted if NEXT.match(wanted) else "/account"
+        response = RedirectResponse(base(request) + after, status_code=303)
         # Limited to the account pages: the sites this host serves share its address and must never see it.
         response.set_cookie(COOKIE, session["token"], max_age=SESSION_DAYS * 86400, httponly=True,
                             samesite="lax", secure=secure(request), path=base(request) + "/account")
@@ -303,6 +335,71 @@ def create_platform_app(platform: Platform) -> FastAPI:
         platform.revoke_account_key(session["account"], key_id)
         return RedirectResponse(base(request) + "/account", status_code=303)
 
+    @app.post("/account/connections/{connection}/disconnect")
+    async def page_disconnect(request: Request, connection: str):
+        data = await form_of(request)
+        session = signed_in(request, data)
+        await run_in_threadpool(platform.connections.disconnect, session["account"], connection)
+        return RedirectResponse(base(request) + "/account", status_code=303)
+
+    # ------------------------------------------------------------ approving an assistant
+
+    @app.get("/account/authorize")
+    def authorize_page(request: Request):
+        """Where an assistant's sign-in flow brings the person: sign in, then approve or deny."""
+        here = base(request)
+        pending = platform.connections.pending(request.query_params.get("request"))
+        returns_to = urlsplit(pending["returns_to"]).netloc or pending["returns_to"]
+        claim = (f"<p>An assistant that calls itself <strong class='claim'>{escape(pending['client_name'])}"
+                 f"</strong> is asking to connect. If you approve, you are sent back to it at "
+                 f"<strong class='claim'>{escape(returns_to)}</strong>.</p>"
+                 "<p class='note'>The name is the assistant's own claim and this host cannot check it. "
+                 "The address it returns to is checked.</p>")
+        session = platform.session(request.cookies.get(COOKIE))
+        if session is None:
+            carry = f"<input type='hidden' name='next' value='{pending['id']}'>"
+            return _page(platform, "Sign in to connect an assistant", claim
+                         + "<p>Sign in with your email address first. We send a one-time code; there is no "
+                           "password.</p>" + sign_in_form(here, carry))
+        mine = [s for s in platform.sites(session["account"]) if not s["suspended"]]
+        start = (f"<form method='post' action='{here}/account/authorize'>{hidden(session)}"
+                 f"<input type='hidden' name='request' value='{pending['id']}'>")
+        deny = "<button class='quiet' name='decision' value='deny'>Deny</button>"
+        if pending["site"] and pending["site"] not in [s["name"] for s in mine]:
+            body = (f"<p class='warn'>It asked for the site <strong>{escape(pending['site'])}</strong>, which is "
+                    "not one of your sites on this account, so it cannot be approved here.</p>"
+                    f"{start}<div class='choice'>{deny}</div></form>")
+        elif not mine:
+            body = (f"<p class='warn'>You have no site to connect yet. <a href='{here}/account'>Create one on "
+                    f"your account page</a>, then connect the assistant again.</p>{start}<div class='choice'>"
+                    f"{deny}</div></form>")
+        else:
+            if pending["site"]:
+                which = f"<p>Site: <strong>{escape(pending['site'])}</strong></p>"
+            else:
+                options = "".join(f"<option value='{escape(s['name'], quote=True)}'>{escape(s['name'])}</option>"
+                                  for s in mine)
+                which = f"<label for='site'>Which site?</label><select id='site' name='site'>{options}</select>"
+            body = (f"{start}{which}"
+                    "<p class='warn'>Allowing gives this assistant <strong>full control of that one site</strong>: "
+                    "it can read, change and delete everything on it, including private content, exactly as "
+                    "the site's owner key can. It gets no access to your other sites or your account. You "
+                    "can disconnect it on your account page at any time.</p>"
+                    "<div class='choice'><button name='decision' value='allow'>Allow</button>"
+                    f"{deny}</div></form>")
+        return _page(platform, "Connect an assistant", claim + body)
+
+    @app.post("/account/authorize")
+    async def authorize_decide(request: Request):
+        data = await form_of(request)
+        session = signed_in(request, data)
+        c = platform.connections
+        if data.get("decision") == "allow":
+            back = await run_in_threadpool(c.approve, data.get("request"), session["account"], data.get("site"))
+        else:
+            back = await run_in_threadpool(c.deny, data.get("request"))
+        return RedirectResponse(back, status_code=303, headers={"Cache-Control": "no-store"})
+
     @app.get("/account/confirm")
     def confirm_page(request: Request):
         ticket = request.query_params.get("ticket", "")
@@ -324,6 +421,23 @@ def create_platform_app(platform: Platform) -> FastAPI:
         return _page(platform, "Confirmed", "<p>Your assistant can now continue. You can close this page.</p>"
                      f"<p class='note'>To review or revoke its key, <a href='{base(request)}/account'>sign in to "
                      "your account</a>.</p>")
+
+    # ------------------------------------------------------------ the sign-in flow's own endpoints
+
+    if platform.connections.available():
+        from . import oauth
+
+        def protected_resource(name: str):
+            """Tells an assistant which host signs people in for this site's MCP door."""
+            if platform.connections.site_of(platform.connections.resource_of(name)) is None:
+                raise HTTPException(404, "No such site.")
+            return JSONResponse(platform.connections.resource_metadata(name),
+                                headers={"Cache-Control": "public, max-age=3600",
+                                         "Access-Control-Allow-Origin": "*"})
+
+        app.get("/.well-known/oauth-protected-resource/s/{name}/mcp")(protected_resource)
+        app.get("/.well-known/oauth-protected-resource/s/{name}/mcp/")(protected_resource)
+        app.router.routes.extend(oauth.routes(platform.connections))
 
     return app
 

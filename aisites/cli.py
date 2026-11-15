@@ -291,6 +291,9 @@ def _host(argv: list, clock: Optional[Callable], out: Any) -> int:
     i.add_argument("--name", help="what the service is called in emails and pages")
     i.add_argument("--public-url", help="the address people reach it at, e.g. https://sites.example.org")
     i.add_argument("--sites-per-account", type=int)
+    i.add_argument("--client-metadata-urls", choices=["on", "off"],
+                   help="let an assistant identify itself by the address of a document it publishes, which this "
+                        "host then fetches (default: on)")
     i.add_argument("--mail-file", metavar="PATH", help="development: write emails to this file instead of sending")
     i.add_argument("--smtp-host", help="mail server, e.g. smtp.resend.com")
     i.add_argument("--smtp-port", type=int, default=587)
@@ -314,9 +317,13 @@ def _host(argv: list, clock: Optional[Callable], out: Any) -> int:
             mail_config = {"type": "smtp", "host": ns.smtp_host, "port": ns.smtp_port, "username": ns.smtp_user,
                            "sender": ns.smtp_sender, "tls": ns.smtp_tls}
         platform = Platform.init(ns.directory, clock, name=ns.name, public_url=ns.public_url,
-                                 sites_per_account=ns.sites_per_account, mail=mail_config)
+                                 sites_per_account=ns.sites_per_account, mail=mail_config,
+                                 client_metadata_urls={"on": True, "off": False}.get(ns.client_metadata_urls))
         shown = dict(platform.config)
         note = "Serve it with: aisites serve --sites " + str(ns.directory)
+        if not platform.connections.available():
+            note += (". The sign-in flow for assistants is off: it needs --public-url to be an https address "
+                     "with no path (or http://localhost for trying it out)")
         if shown["mail"].get("type") == "smtp":
             note += ". Provide the mail password in the AISITES_SMTP_PASSWORD environment variable."
         elif not shown["mail"]:
