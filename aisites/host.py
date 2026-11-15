@@ -112,6 +112,8 @@ class Host:
             return
         child = dict(scope)
         child["root_path"] = root
+        if by_path and platform is not None and platform.config["public_url"]:
+            child["aisites.base"] = platform.link(f"/s/{name}")
         if by_path and platform is not None and platform.connections.available():
             child["aisites.resource_metadata"] = platform.connections.resource_metadata_url(name)
         if path == root:  # /s/name with no trailing slash

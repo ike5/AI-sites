@@ -50,8 +50,8 @@ def call(http, key=None, idem="k1", body=None, path="/actions/cards/stamp", **pa
 
 def test_actions_are_discoverable(stamped):
     site, _, http = stamped
-    entry = next(s for s in http.get("/").json()["structures"] if s["name"] == "cards")
-    assert entry["actions"] == ["stamp"] and http.get("/").json()["links"]["actions"] == "/actions"
+    entry = next(s for s in http.get("/map").json()["structures"] if s["name"] == "cards")
+    assert entry["actions"] == ["stamp"] and http.get("/map").json()["links"]["actions"] == "/actions"
     listing = http.get("/actions").json()
     action = listing["actions"][0]
     assert action["href"] == "/actions/cards/stamp" and action["needs_key"] is True and action["changes_site"]
@@ -156,7 +156,7 @@ def test_guest_key_reads_invite_only_data(stamped):
     site, owner, http = stamped
     site.alter("cards", access="invite")
     assert http.get("/collections/cards").status_code == 401
-    entry = next(s for s in http.get("/").json()["structures"] if s["name"] == "cards")
+    entry = next(s for s in http.get("/map").json()["structures"] if s["name"] == "cards")
     assert entry["note"] == "Needs a key from the site owner."
 
     stranger = guest(site, [{"target": "cards", "ops": ["stamp"]}])
@@ -167,7 +167,7 @@ def test_guest_key_reads_invite_only_data(stamped):
         "a guest gets the visitor view: no private fields"
     assert http.get("/collections/cards/c1", headers=auth(stranger)).status_code == 200
     assert http.get("/collections/cards/schema", headers=auth(stranger)).status_code == 200
-    entry = next(s for s in http.get("/", headers=auth(stranger)).json()["structures"] if s["name"] == "cards")
+    entry = next(s for s in http.get("/map", headers=auth(stranger)).json()["structures"] if s["name"] == "cards")
     assert "note" not in entry
 
     tag = r.headers["etag"]

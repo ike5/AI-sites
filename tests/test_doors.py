@@ -104,7 +104,7 @@ def snapshot(site):
                | {"values": e.get("values"), "fields": sorted(e["commit"]), "revealed": e.get("revealed"),
                   "detail": {k: v for k, v in e["detail"].items() if k != "public_key"}}  # random per site
                for e in log(site)]
-    described = site.describe()
+    described = site.describe(full=True)
     state = {}
     for s in described["structures"]:
         state[s["name"]] = site.read_tree(s["name"])["nodes"] if s["type"] == "tree" \

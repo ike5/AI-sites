@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from . import kinds, schema, timeview
+from . import kinds, reading, schema, timeview
 from .errors import SiteError, not_found
 from .history import History
 from .schema import FieldSpec, StructureDef
@@ -33,15 +33,17 @@ from .actions import ActionsMixin
 from .bookings import BookingsMixin
 from .checkpoints import CheckpointMixin
 from .forms import FormsMixin
+from .questions import QuestionsMixin
 from .redaction import RedactionMixin
 
 VERSION = "0.1"
 KEY_RE = re.compile(r"^[^\s/?#]+$")
 FILTER_OPS = ("eq", "ne", "gt", "gte", "lt", "lte")
-CONFIG_FIELDS = ("name", "description", "timezone", "language", "currency")
+CONFIG_FIELDS = ("name", "description", "timezone", "language", "currency", "url")
 
 
-class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsMixin, FormsMixin):
+class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsMixin, FormsMixin,
+           QuestionsMixin):
     def __init__(self, directory: Any, clock: Optional[Callable[[], datetime]] = None,
                  anchors: Optional[list] = None):
         self.dir = Path(directory)
@@ -274,11 +276,17 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
                     raise not_found(f"The {ttype} '{target}' that field '{f.name}' chooses from",
                                     "Define it first.")
 
+    def _free_name(self, name: str) -> None:
+        if name in self.defined_questions():
+            raise SiteError("name_taken", f"'{name}' is already the id of a question.",
+                            "Choose another name, or remove the question first.", status=409)
+
     def define(self, name: str, type: str = "collection", kind: Optional[str] = None, key: Optional[str] = None,
                access: str = "public", description: str = "", fields: Optional[list] = None,
                refs: Optional[dict] = None, settings: Optional[dict] = None) -> dict:
         """Create a structure: a collection (optionally of a built-in kind) or a tree."""
         schema.check_name(name, "structure")
+        self._free_name(name)
         if type not in ("collection", "tree", "form"):
             raise SiteError("invalid", f"'{type}' is not a structure type.", "Use 'collection', 'tree' or 'form'.")
         if access not in schema.ACCESS:
@@ -416,17 +424,35 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             self._bump()
         return {"dropped": name}
 
-    def describe(self, name: Optional[str] = None) -> dict:
-        """One structure's definition, or the whole site: settings, structures and available kinds."""
+    def describe(self, name: Optional[str] = None, full: bool = False) -> dict:
+        """One structure's definition, or the whole site.
+
+        The whole site is given in short form (each structure's fields as "type -> reference") unless
+        `full` asks for every field definition and the built-in kinds, which is several times larger.
+        """
         if name:
             sdef = self._sdef(name)
             out = sdef.dump()
             table, col = ("nodes", "tree") if sdef.type == "tree" else ("records", "collection")
             out["count"] = self.store.one(f"SELECT COUNT(*) AS n FROM {table} WHERE {col}=?", (name,))["n"]
             return out
-        return {"site": self.config,
-                "structures": [self.describe(n) for n in self._defs()],
-                "kinds": kinds.describe()}
+        if full:
+            return {"site": self.config, "structures": [self.describe(n) for n in self._defs()],
+                    "kinds": kinds.describe()}
+        structures = []
+        for d in self._defs().values():
+            whole = self.describe(d.name)
+            item = {k: whole[k] for k in ("name", "type", "kind", "access", "count") if whole.get(k) is not None}
+            if d.fields:
+                item["fields"] = {
+                    f.name: f.type + ("[]" if f.many else "") + ("" if f.policy == "logged" else " " + f.policy)
+                    + (" -> " + next(iter(f.choices.values())) if f.choices else "") for f in d.fields}
+            if d.settings:
+                item["settings"] = sorted(d.settings)
+            structures.append(item)
+        return {"site": self.config, "structures": structures, "kinds": sorted(kinds.KINDS),
+                "more": "describe with a target gives one structure in full; describe with full=true gives "
+                        "every field definition and the fields of each built-in kind."}
 
     # ------------------------------------------------------------ record helpers
 
@@ -621,37 +647,54 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             self._publish(sdef, key, {n: clean[n] for n in sdef.logged_names() if n in clean}, now, clean, "added")
         return self.get(name, key)
 
-    def get(self, name: str, key: str) -> dict:
-        """One record with everything the owner may see, or one tree node with its subtree."""
+    def get(self, name: str, key: str, follow: Any = None) -> dict:
+        """One record with everything the owner may see, or one tree node with its subtree.
+
+        `follow` names references to attach, e.g. ["place", "place.hours"].
+        """
         self.tick()
         sdef = self._sdef(name)
         self._no_form(sdef)
         if sdef.type == "tree":
             return self._node_view(sdef, str(key))
         row = self._need_row(sdef, key)
-        return self._view(sdef, row, self._schedules(name, key).get(row["key"], []), self.now_z(), True)
+        view = self._view(sdef, row, self._schedules(name, key).get(row["key"], []), self.now_z(), True)
+        if follow:
+            look = reading.Reading(self, True)
+            look.attach(view, look.plan(sdef, follow, None)[1])
+        return view
+
+    def _views(self, sdef: StructureDef, owner: bool, now: str) -> dict:
+        """key -> what this reader sees of each record in a collection, leaving out the ones they cannot see."""
+        schedules = self._schedules(sdef.name)
+        out = {}
+        for row in self.store.q("SELECT * FROM records WHERE collection=? ORDER BY key", (sdef.name,)):
+            view = self._view(sdef, row, schedules.get(row["key"], []), now, owner)
+            if view is not None:
+                out[row["key"]] = view
+        return out
 
     def list(self, name: str, where: Optional[dict] = None, sort: Optional[str] = None, limit: int = 100,
-             cursor: Optional[str] = None, fields: Optional[list] = None, owner: bool = True) -> dict:
-        """Records matching filters such as {"price.lt": 50, "region": "MX"}, sorted and paged."""
+             cursor: Optional[str] = None, fields: Optional[list] = None, owner: bool = True,
+             q: Optional[str] = None, follow: Any = None) -> dict:
+        """Records matching filters such as {"price.lt": 50, "region": "MX"}, sorted and paged.
+
+        Beyond a record's own fields (see reading.py): `q` matches words in the record or in the name of
+        anything it refers to; a filter may pass through a reference ("place.city"); `follow` attaches
+        linked records ("place", "place.hours"); `fields` may name fields of attached records ("place.name").
+        """
         self.tick()
         sdef = self._sdef(name)
         self._no_form(sdef)
         if sdef.type == "tree":
             return self.read_tree(name)
-        now_dt, now = self.now(), self.now_z()
-        conds = []
-        for k, raw in (where or {}).items():
-            fname, _, op = k.partition(".")
-            op = op or "eq"
-            f = sdef.field(fname)
-            if f is None or (f.policy == "private" and not owner):
-                raise SiteError("bad_filter", f"'{fname}' is not a field of '{name}'.",
-                                "Fields: " + ", ".join(self._visible_names(sdef, owner)) + ".")
-            if op not in FILTER_OPS:
-                raise SiteError("bad_filter", f"'.{op}' is not a filter operator.",
-                                "Use field=value or field.gte, .gt, .lte, .lt, .ne.")
-            conds.append((f, op, schema.filter_value(f, raw, self.tz, now_dt)))
+        now = self.now_z()
+        look = reading.Reading(self, owner)
+        conds = [look.condition(sdef, k, raw) for k, raw in (where or {}).items()]
+        wanted = reading.words(q) if q else []
+        if q and not wanted:
+            raise SiteError("bad_filter", "q needs at least one word to look for.")
+        fields, links = look.plan(sdef, follow, fields)
         if fields:
             for fname in fields:
                 if fname not in self._visible_names(sdef, owner):
@@ -663,14 +706,10 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             sort_field = sdef.field(sort.lstrip("-"))
             if sort_field is None or (sort_field.policy == "private" and not owner):
                 raise SiteError("bad_sort", f"'{sort}' is not a field of '{name}'.")
-        schedules = self._schedules(name)
         items = []
-        for row in self.store.q("SELECT * FROM records WHERE collection=? ORDER BY key", (name,)):
-            view = self._view(sdef, row, schedules.get(row["key"], []), now, owner)
-            if view is None:
-                continue
+        for view in self._views(sdef, owner, now).values():
             tz = schema.record_zone(sdef, view["data"], self.tz)
-            if all(self._match(f, op, want, view["data"].get(f.name), tz) for f, op, want in conds):
+            if all(look.test(c, view, tz) for c in conds) and (not wanted or look.says(sdef, view, wanted)):
                 items.append((view, tz))
         if sort_field is not None:
             def sort_key(pair):
@@ -685,8 +724,9 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         except (TypeError, ValueError):
             raise SiteError("bad_page", "limit and cursor must be whole numbers.")
         page = [p[0] for p in items[offset:offset + limit]]
-        if fields:
-            for view in page:
+        for view in page:
+            look.attach(view, links)
+            if fields:
                 view["data"] = {k: v for k, v in view["data"].items() if k in fields}
         out = {"collection": name, "items": page, "total": len(items), "as_of": now}
         if offset + limit < len(items):
@@ -696,16 +736,33 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
     def _visible_names(self, sdef: StructureDef, owner: bool) -> list:
         return [f.name for f in sdef.fields if owner or f.policy != "private"]
 
-    @staticmethod
-    def _match(f: FieldSpec, op: str, want: Any, value: Any, tz: ZoneInfo) -> bool:
-        if value is None:
-            return op == "ne"
-        if f.many:
-            got = [schema.comparable(FieldSpec(name=f.name, type=f.type), v, tz) for v in value]
-            return (want in got) if op == "eq" else (want not in got) if op == "ne" else False
-        got = schema.comparable(f, value, tz)
-        return {"eq": got == want, "ne": got != want, "gt": got > want, "gte": got >= want,
-                "lt": got < want, "lte": got <= want}[op]
+    def find(self, q: Any, limit: int = 10, owner: bool = True) -> dict:
+        """Records anywhere on the site whose words match, as short candidates to read next."""
+        self.tick()
+        wanted = reading.words(q or "")
+        if not wanted:
+            raise SiteError("bad_filter", "find needs at least one word to look for.", "Example: /find?q=ibuprofen")
+        try:
+            limit = max(1, min(50, int(limit)))
+        except (TypeError, ValueError):
+            raise SiteError("bad_page", "limit must be a whole number.")
+        look = reading.Reading(self, owner)
+        now = self.now_z()
+        found = []
+        for sdef in look.defs.values():
+            if sdef.type != "collection" or not (owner or look.may_read(sdef)):
+                continue
+            for view in self._views(sdef, owner, now).values():
+                if not reading.has(reading.text_words(sdef, view), wanted):
+                    continue
+                label = reading.label_of(sdef, view)
+                named = label != view["key"] and reading.has(reading.text_words(sdef, view, labels_only=True), wanted)
+                exact = sum(w in reading.words(label) for w in wanted)
+                found.append(((not named, -exact, sdef.name, view["key"]),
+                              {"collection": sdef.name, "key": view["key"], "label": label,
+                               **({"kind": sdef.kind} if sdef.kind else {})}))
+        found.sort(key=lambda pair: pair[0])
+        return {"q": str(q), "matches": [m for _, m in found[:limit]], "total": len(found), "as_of": now}
 
     def change(self, name: str, key: str, set: dict) -> dict:
         """Change fields of an existing record or tree node. A null value clears a field."""
@@ -1071,7 +1128,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
                             "Send the key you were given as: Authorization: Bearer <key>", status=401)
         return sdef
 
-    def read_record(self, name: str, key: str, owner: bool = False) -> dict:
+    def read_record(self, name: str, key: str, owner: bool = False, follow: Any = None) -> dict:
         self.tick()
         sdef = self.readable(name, owner)
         if sdef.type != "collection":
@@ -1080,6 +1137,9 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         view = self._view(sdef, row, self._schedules(name, key).get(key, []), self.now_z(), owner) if row else None
         if view is None:
             raise not_found(f"Record '{key}' in '{name}'")
+        if follow:
+            look = reading.Reading(self, owner)
+            look.attach(view, look.plan(sdef, follow, None)[1])
         view["collection"] = name
         view["as_of"] = self.now_z()
         return view
@@ -1128,7 +1188,11 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         return row["time"] if row else ""
 
     def manifest(self, owner: bool = False, prefix: str = "") -> dict:
-        """The single entry point an agent reads first."""
+        """The map of the site: every structure with its fields and references, and how to read them.
+
+        An assistant reads the short list of questions first (questions.front); this is for one that wants
+        to write its own reads.
+        """
         config = self.config
         structures = []
         has_hours = False
@@ -1145,6 +1209,12 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
                 item["description"] = d.description
             if d.type == "collection":
                 item["schema"] = base + "/schema"
+                # Enough to write a read without fetching each schema: type, whether it is a live value,
+                # and where a reference leads.
+                item["fields"] = {
+                    f.name: f.type + ("[]" if f.many else "") + (" live" if f.policy in ("live", "capacity") else "")
+                    + (" -> " + next(iter(f.choices.values())) if f.choices else "")
+                    for f in d.fields if owner or f.policy != "private"}
             if d.access == "invite" and not owner and not self._reader_may(d.name):
                 item["note"] = "Needs a key from the site owner."
             actions = [op.name for op in ops_mod.OPS.values() if op.visitor and op.setting in d.settings]
@@ -1156,13 +1226,20 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             "aisites": VERSION, **{k: v for k, v in config.items() if v},
             "first_published": self.first_published(), "as_of": self.now_z(),
             "public_key": self.public_key, "structures": structures,
-            "links": {"actions": f"{prefix}/actions", "changes": f"{prefix}/changes", "stream": f"{prefix}/changes/stream", "history": f"{prefix}/history",
+            "links": {"ask": f"{prefix}/ask", "find": f"{prefix}/find?q=", "actions": f"{prefix}/actions",
+                      "changes": f"{prefix}/changes", "stream": f"{prefix}/changes/stream",
+                      "history": f"{prefix}/history",
                       "head": f"{prefix}/history/head",
                       "overview": f"{prefix}/llms.txt", "openapi": f"{prefix}/openapi.json"},
             "reading": [
                 "Collections: GET href. Filter with field=value or field.gte/.gt/.lte/.lt/.ne, pick fields "
                 "with fields=a,b, page with limit and cursor, sort with sort=field or sort=-field, and use "
                 "format=table for compact rows.",
+                "Words: field.has=words, or q=words for the record and the names of what it refers to. Case and "
+                "accents are ignored and a word may be the start of a longer one.",
+                "References (fields marked ->): filter through one with place.city=..., attach linked records "
+                "with with=place,place.hours, and pick their fields with fields=price,place.name. A collection "
+                "that refers back can be attached by its name.",
                 "Each record states when it was last updated or confirmed, when live values were read, and "
                 "next_change if a change is already announced.",
                 "Dates in filters accept today and tomorrow, resolved in the site's time zone.",

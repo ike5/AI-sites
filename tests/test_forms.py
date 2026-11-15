@@ -175,7 +175,7 @@ def test_visiting_agent_flow(bakery):
     key, _ = keyed(site)
     http = client(site)
 
-    entry = next(s for s in http.get("/.well-known/aisite.json").json()["structures"] if s["name"] == "contact")
+    entry = next(s for s in http.get("/map").json()["structures"] if s["name"] == "contact")
     assert entry["href"] == "/forms/contact" and entry["actions"] == ["submit", "ticket"]
     form = http.get(entry["href"]).json()
     assert form["purposes"][0] == "Order question" and form["text_max"] == 600 and form["needs_key"]
@@ -365,7 +365,7 @@ def test_form_page_visibility(bakery):
     assert http.get("/forms/contact", headers=auth(key)).status_code == 200, "a sender may see its form"
     site.alter("contact", access="private")
     assert http.get("/forms/contact").status_code == 404
-    assert not any(s["name"] == "contact" for s in http.get("/").json()["structures"])
+    assert not any(s["name"] == "contact" for s in http.get("/map").json()["structures"])
     assert http.get("/forms/contact", headers=auth(owner)).status_code == 200
     site.alter("contact", settings={"form": None})
     assert http.get("/forms/contact", headers=auth(owner)).json()["accepting"] is False

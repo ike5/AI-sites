@@ -23,16 +23,22 @@ def test_manifest_is_the_entry_point(web):
     r = c.get("/.well-known/aisite.json")
     m = r.json()
     assert r.headers["link"] == '</.well-known/aisite.json>; rel="describedby"'
-    assert c.get("/").json()["structures"] == m["structures"]
-    by_name = {s["name"]: s for s in m["structures"]}
-    assert set(by_name) == {"genres", "games", "hours"}, "private structures are not listed"
-    assert by_name["games"] == {"name": "games", "type": "collection", "access": "public",
-                                "href": "/collections/games", "kind": "Product", "semantic": "schema:Product",
-                                "description": by_name["games"]["description"],
-                                "schema": "/collections/games/schema"}
-    assert m["timezone"] == "America/Los_Angeles" and m["currency"] == "USD"
-    assert m["first_published"] and m["public_key"] and "open_on_date" in m["answers"]
-    assert "calendar" in {s["name"] for s in c.get("/", headers=auth(key)).json()["structures"]}
+    assert c.get("/").json()["ask"] == m["ask"]
+    assert [q["id"] for q in m["ask"]] == ["hours", "games", "genres"], "private structures are not listed"
+    assert m["timezone"] == "America/Los_Angeles" and m["currency"] == "USD" and m["first_published"]
+    assert "structures" not in m, "the first response lists questions; fields and references are in the map"
+
+    full = c.get("/map").json()
+    by_name = {s["name"]: s for s in full["structures"]}
+    assert set(by_name) == {"genres", "games", "hours"}
+    games = by_name["games"]
+    assert {k: games[k] for k in ("name", "type", "access", "href", "kind", "schema")} == {
+        "name": "games", "type": "collection", "access": "public", "href": "/collections/games",
+        "kind": "Product", "schema": "/collections/games/schema"}
+    assert games["fields"]["stock"] == "integer live" and games["fields"]["category"] == "string -> genres"
+    assert "cost" not in games["fields"], "private fields are not on a visitor's map"
+    assert full["public_key"] and "open_on_date" in full["answers"]
+    assert "calendar" in {s["name"] for s in c.get("/map", headers=auth(key)).json()["structures"]}
 
 
 def test_filters_sorting_paging_and_projection(web):
@@ -137,7 +143,8 @@ def test_html_only_when_asked(web):
 def test_overview_and_openapi(web):
     _, key, c = web
     text = c.get("/llms.txt").text
-    assert text.startswith("# Test site") and "[games](/collections/games)" in text and "calendar" not in text
+    assert text.startswith("# Test site") and "calendar" not in text
+    assert "](http://testserver/ask/games) (takes q, key)" in text and "http://testserver/map" in text
     doc = c.get("/openapi.json").json()
     assert "/collections/games" in doc["paths"] and "/trees/genres" in doc["paths"] and "/hours" in doc["paths"]
     assert "/collections/calendar" not in doc["paths"]

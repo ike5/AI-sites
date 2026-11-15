@@ -191,4 +191,13 @@ def hours_on(hours: dict, closures: list, day: date, tz: ZoneInfo, now: datetime
     if local_now.date() == day:
         hhmm = local_now.strftime("%H:%M")
         result["open_now"] = any(a <= hhmm < b for a, b in intervals)
+        # When this answer stops being true: the next opening or closing today, else the start of tomorrow.
+        edges = sorted(t for pair in intervals for t in pair if t > hhmm)
+        if edges:
+            hour, minute = (int(x) for x in edges[0].split(":"))
+            turn = datetime(day.year, day.month, day.day, tzinfo=tz) + timedelta(hours=hour, minutes=minute)
+        else:
+            nxt = day + timedelta(days=1)
+            turn = datetime(nxt.year, nxt.month, nxt.day, tzinfo=tz)
+        result["next_change"] = to_z(turn)
     return result

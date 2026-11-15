@@ -90,7 +90,7 @@ def test_setting_validation(site):
 def test_restaurant_flow_through_the_web(rest, clock):
     site, owner = rest
     http = client(site)
-    entry = next(s for s in http.get("/.well-known/aisite.json").json()["structures"] if s["name"] == "tables")
+    entry = next(s for s in http.get("/map").json()["structures"] if s["name"] == "tables")
     assert set(entry["actions"]) == {"reserve", "book", "release", "booking"}
     actions = {a["action"]: a for a in http.get("/actions").json()["actions"] if a.get("target") == "tables"}
     assert actions["reserve"]["needs_key"] is False and actions["reserve"]["arguments"]["required"] == ["key"]

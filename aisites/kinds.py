@@ -46,6 +46,8 @@ KINDS: Dict[str, dict] = {
         "description": "A physical location such as a branch, campus or street corner.",
         "fields": [
             _f("name", required=True, semantic="schema:name"),
+            _f("aliases", many=True, semantic="schema:alternateName",
+               description="Other names people use for it, so a search finds it."),
             _f("address", semantic="schema:streetAddress"),
             _f("city", semantic="schema:addressLocality"),
             _f("region", semantic="schema:addressRegion"),
@@ -108,6 +110,9 @@ KINDS: Dict[str, dict] = {
         "fields": [
             _f("sku", semantic="schema:sku"),
             _f("name", required=True, semantic="schema:name"),
+            _f("aliases", many=True, semantic="schema:alternateName",
+               description="Other names people use for it (brand, common name, another language), so a search "
+                           "finds it."),
             _f("description", "text", semantic="schema:description"),
             _f("price", "decimal", semantic="schema:price"),
             _f("price_currency", semantic="schema:priceCurrency", description="ISO 4217 code, e.g. USD."),

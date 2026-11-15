@@ -139,7 +139,9 @@ def test_product_manager_through_mcp(games):
             return tools, out
 
     tools, out = asyncio.run(go())
-    assert tools == set(ops.OPS), "every caller sees the same tools"
+    granted = {name for g in site.role_grants("pricing") for name in g["ops"]}
+    assert tools == (granted & set(ops.OPS)) | {"describe"}, "a role is shown only the tools it may use"
+    assert "change" in tools and "define" not in tools and len(tools) < len(ops.OPS) / 2
     assert out["change"][0][0] is False and out["change"][0][1]["data"]["price"] == "44.99"
     assert out["change"][1][0] is True and out["change"][1][1]["error"]["code"] == "forbidden"
     assert "wholesale_cost" not in out["get"][0][1]["data"]

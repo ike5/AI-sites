@@ -9,11 +9,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from . import html, ops, schema, timeview
+from . import html, ops, questions, reading, schema, timeview
 from .errors import SiteError
+from .reading import tag_of
 from .site import Site, VERSION
 
-RESERVED = {"limit", "cursor", "fields", "sort", "format"}
+RESERVED = {"limit", "cursor", "fields", "sort", "format", "q", "with"}
 
 
 def create_app(site: Site) -> FastAPI:
@@ -24,6 +25,11 @@ def create_app(site: Site) -> FastAPI:
 
     def prefix(request: Request) -> str:
         return request.scope.get("root_path", "").rstrip("/")
+
+    def base(request: Request) -> str:
+        """The site's full address, for links an assistant can open without building them."""
+        return (request.scope.get("aisites.base") or site.config.get("url")
+                or str(request.base_url)).rstrip("/")
 
     def token(request: Request) -> Optional[str]:
         auth = request.headers.get("authorization", "")
@@ -50,9 +56,9 @@ def create_app(site: Site) -> FastAPI:
         return {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Accept, Authorization",
                 "Link": f'<{prefix(request)}/.well-known/aisite.json>; rel="describedby"'}
 
-    def reply(request: Request, payload: Any, owner: bool, title: str, etag_extra: str = "") -> Response:
+    def reply(request: Request, payload: Any, owner: bool, title: str) -> Response:
         """JSON by default; HTML only when asked for. Every reply is cheap to revalidate."""
-        etag = site.etag(owner, etag_extra)
+        etag = tag_of(payload)
         head = headers(request, etag)
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=head)
@@ -90,18 +96,25 @@ def create_app(site: Site) -> FastAPI:
     @app.get("/.well-known/aisite.json")
     def manifest(request: Request):
         owner = is_owner(request)
-        return reply(request, site.manifest(owner, prefix(request)), owner, site.config.get("name", "Site"))
+        return reply(request, questions.front(site, owner, base(request)), owner, site.config.get("name", "Site"))
+
+    @app.get("/map")
+    def site_map(request: Request):
+        owner = is_owner(request)
+        return reply(request, site.manifest(owner, prefix(request)), owner, "Map")
 
     @app.get("/llms.txt")
     def overview(request: Request):
         owner = is_owner(request)
-        return PlainTextResponse(llms_txt(site, owner, prefix(request)), media_type="text/markdown; charset=utf-8",
-                                 headers=headers(request, site.etag(owner)))
+        text = llms_txt(site, owner, prefix(request), base(request))
+        return PlainTextResponse(text, media_type="text/markdown; charset=utf-8",
+                                 headers=headers(request, tag_of(text)))
 
     @app.get("/openapi.json")
     def openapi(request: Request):
         owner = is_owner(request)
-        return JSONResponse(openapi_doc(site, owner, prefix(request)), headers=headers(request, site.etag(owner)))
+        doc = openapi_doc(site, owner, prefix(request))
+        return JSONResponse(doc, headers=headers(request, tag_of(doc)))
 
     # ------------------------------------------------------------ collections
 
@@ -112,12 +125,12 @@ def create_app(site: Site) -> FastAPI:
         q = request.query_params
         where = {k: v for k, v in q.items() if k not in RESERVED}
         fields = [f for f in q.get("fields", "").split(",") if f] or None
-        out = site.list(name, where, q.get("sort"), q.get("limit", 100), q.get("cursor"), fields, owner=owner)
+        out = site.list(name, where, q.get("sort"), q.get("limit", 100), q.get("cursor"), fields, owner=owner,
+                        q=q.get("q"), follow=q.get("with"))
         if q.get("format") == "table":
-            cols = fields or [f.name for f in sdef.fields if owner or f.policy != "private"]
-            out = {"collection": name, "columns": cols,
-                   "rows": [[item["data"].get(c) for c in cols] for item in out["items"]],
-                   **{k: out[k] for k in ("total", "next", "as_of") if k in out}}
+            own = [f for f in fields or [] if "." not in f] or \
+                [f.name for f in sdef.fields if owner or f.policy != "private"]
+            out = reading.table(out, sdef, own, [f for f in fields or [] if "." in f])
         out["schema"] = f"{prefix(request)}/collections/{name}/schema"
         return reply(request, out, owner, name)
 
@@ -133,7 +146,7 @@ def create_app(site: Site) -> FastAPI:
     @app.get("/collections/{name}/{key}")
     def get_record(request: Request, name: str, key: str):
         owner = is_owner(request)
-        out = site.read_record(name, key, owner)
+        out = site.read_record(name, key, owner, request.query_params.get("with"))
         if site.readable(name, owner).public:
             out["history"] = f"{prefix(request)}/collections/{name}/{key}/history"
         return reply(request, out, owner, f"{name} / {key}")
@@ -155,17 +168,23 @@ def create_app(site: Site) -> FastAPI:
         q = request.query_params
         return reply(request, site.read_tree(name, q.get("node"), q.get("depth")), owner, name)
 
+    @app.get("/find")
+    def find(request: Request):
+        owner = is_owner(request)
+        q = request.query_params
+        return reply(request, site.find(q.get("q"), q.get("limit", 10), owner), owner, "Find")
+
     @app.get("/hours")
     def hours_all(request: Request):
         owner = is_owner(request)
         date = request.query_params.get("date")
-        return reply(request, site.hours(date, None, owner), owner, "Opening hours", _day_tag(site, date))
+        return reply(request, site.hours(date, None, owner), owner, "Opening hours")
 
     @app.get("/hours/{key}")
     def hours_one(request: Request, key: str):
         owner = is_owner(request)
         date = request.query_params.get("date")
-        return reply(request, site.hours(date, key, owner), owner, "Opening hours", _day_tag(site, date))
+        return reply(request, site.hours(date, key, owner), owner, "Opening hours")
 
     @app.get("/changes")
     def changes(request: Request):
@@ -200,14 +219,13 @@ def create_app(site: Site) -> FastAPI:
     @app.get("/history/head")
     def history_head(request: Request):
         owner = is_owner(request)
-        return reply(request, site.head_view(), owner, "Signed history head", site.checkpoint_tag())
+        return reply(request, site.head_view(), owner, "Signed history head")
 
     @app.get("/history/checkpoints")
     def history_checkpoints(request: Request):
         owner = is_owner(request)
         q = request.query_params
-        return reply(request, site.checkpoints(q.get("after", 0), q.get("limit", 100)), owner, "Checkpoints",
-                     site.checkpoint_tag())
+        return reply(request, site.checkpoints(q.get("after", 0), q.get("limit", 100)), owner, "Checkpoints")
 
     @app.get("/history/{seq}")
     def history_entry(request: Request, seq: int):
@@ -254,9 +272,9 @@ def create_app(site: Site) -> FastAPI:
     # Feature modules add their own routes; `ctx` hands them the helpers above.
     from types import SimpleNamespace
     from . import actions, bookings, forms, stream
-    ctx = SimpleNamespace(prefix=prefix, token=token, principal=principal, is_owner=is_owner,
+    ctx = SimpleNamespace(prefix=prefix, base=base, token=token, principal=principal, is_owner=is_owner,
                           headers=headers, reply=reply)
-    for feature in (stream, actions, bookings, forms):
+    for feature in (stream, actions, bookings, forms, questions):
         feature.routes(app, site, ctx)
 
     from .mcp_door import McpHttp
@@ -283,43 +301,57 @@ class HeadAsGet:
         await self.app({**scope, "method": "GET"}, receive, send_without_body)
 
 
-def _day_tag(site: Site, date: Optional[str]) -> str:
-    """Answers for 'today' change at midnight without any write, so the day is part of the ETag."""
-    return "." + timeview.resolve_date(date or "today", site.tz, site.now()).isoformat()
-
-
-def llms_txt(site: Site, owner: bool, prefix: str) -> str:
+def llms_txt(site: Site, owner: bool, prefix: str, base: str = "") -> str:
     m = site.manifest(owner, prefix)
     lines = [f"# {m.get('name', 'Site')}", ""]
     if m.get("description"):
         lines += [f"> {m['description']}", ""]
     lines += [
         "This site publishes its information for AI agents as JSON.",
-        f"Start at {prefix}/.well-known/aisite.json, which lists everything below with schemas.", "",
+        f"Start at {base or prefix}/.well-known/aisite.json, the same list of questions as below.", "",
+        "## What you can ask", "",
+    ]
+    lines += [f"- [{q['does']}]({q['url']})" + (f" (takes {', '.join(q['takes'])})" if q.get("takes") else "")
+              for q in questions.listing(site, owner, base or prefix)]
+    lines += [""] + [f"- {line}" for line in questions.HOW] + [
+        "", "## About this site", "",
         f"- Time zone: {m.get('timezone', 'UTC')}",
     ]
     if m.get("language"):
         lines.append(f"- Language: {m['language']}")
     if m.get("currency"):
         lines.append(f"- Currency: {m['currency']}")
-    lines += [f"- First published: {m['first_published']}", "", "## What is here", ""]
-    for s in m["structures"]:
-        kind = f" ({s['kind']})" if s.get("kind") else ""
-        note = f" {s['note']}" if s.get("note") else ""
-        desc = f": {s['description']}" if s.get("description") else ""
-        lines.append(f"- [{s['name']}]({s['href']}) {s['type']}{kind}{desc}{note}")
-    if m.get("answers"):
-        lines += ["", "## Direct answers", "", f"- Open on a date: {m['answers']['open_on_date']}"]
-    lines += ["", "## How to read", ""] + [f"- {line}" for line in m["reading"]]
+    lines += [f"- First published: {m['first_published']}",
+              f"- Fields and references, for writing your own reads: {base or prefix}/map"]
     return "\n".join(lines) + "\n"
 
 
 def openapi_doc(site: Site, owner: bool, prefix: str) -> dict:
     """An OpenAPI description generated from the structures this reader may see."""
     m = site.manifest(owner, prefix)
-    page = [{"name": n, "in": "query", "schema": {"type": "string"}} for n in ("limit", "cursor", "sort", "fields")]
+    page = [{"name": n, "in": "query", "schema": {"type": "string"}}
+            for n in ("limit", "cursor", "sort", "fields", "q", "with")]
+    ok = {"200": {"description": "OK"}}
+    word = {"type": "string"}
     paths: dict = {
-        "/.well-known/aisite.json": {"get": {"summary": "Site manifest", "responses": {"200": {"description": "OK"}}}},
+        "/.well-known/aisite.json": {"get": {"summary": "The questions this site answers", "responses": ok}},
+        "/ask": {"get": {"summary": "Every question, with what each takes", "responses": ok},
+                 "post": {"summary": "Several questions in one request: {\"ask\": [{\"id\": ..., ...arguments}]}",
+                          "responses": ok}},
+        "/ask/{id}": {"get": {
+            "summary": "One question: its options as links, or its answer. Join ids with commas to ask several.",
+            "parameters": [{"name": "id", "in": "path", "required": True, "schema": word,
+                            "description": "One of: " + ", ".join(q["id"] for q in questions.listing(site, owner))
+                                           + ", or the name of a kind such as Offer."}]
+            + [{"name": n, "in": "query", "schema": word, "description": d} for n, d in (
+                ("q", "Words to find"), ("key", "One record"), ("unless", "A tag: answer only if it changed"),
+                ("links", "0 to leave links out"), ("format", "table for compact rows"),
+                ("max", "Most bytes to return"))],
+            "responses": ok}},
+        "/find": {"get": {"summary": "Records anywhere on the site matching words",
+                          "parameters": [{"name": "q", "in": "query", "required": True, "schema": word}],
+                          "responses": ok}},
+        "/map": {"get": {"summary": "Every structure with its fields and references", "responses": ok}},
         "/changes": {"get": {"summary": "What changed since a cursor",
                              "parameters": [{"name": "since", "in": "query", "schema": {"type": "integer"}}],
                              "responses": {"200": {"description": "OK"}}}},

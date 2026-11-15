@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS idempotency (
     caller TEXT NOT NULL, scope TEXT NOT NULL, idem_key TEXT NOT NULL, request_hash TEXT NOT NULL,
     response TEXT NOT NULL, created TEXT NOT NULL, PRIMARY KEY (caller, scope, idem_key));
+CREATE TABLE IF NOT EXISTS questions (id TEXT PRIMARY KEY, def TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS usage (
     caller TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (caller, day));
 CREATE TABLE IF NOT EXISTS bookings (

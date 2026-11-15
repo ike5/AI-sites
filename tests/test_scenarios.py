@@ -18,6 +18,7 @@ class Agent:
     def __init__(self, http, base=""):
         self.http, self.base = http, base
         self.manifest = self.get(f"{base}/.well-known/aisite.json")
+        self.map = self.get(f"{base}/map")   # for an agent that writes its own reads
 
     def get(self, path, **params):
         r = self.http.get(path, params=params)
@@ -26,7 +27,7 @@ class Agent:
 
     def of_kind(self, kind):
         """Find a structure by what it means, not by what the site happened to call it."""
-        return next(s for s in self.manifest["structures"] if s.get("kind") == kind)
+        return next(s for s in self.map["structures"] if s.get("kind") == kind)
 
     def records(self, kind, **params):
         return self.get(self.of_kind(kind)["href"], **params)["items"]
@@ -38,7 +39,7 @@ def test_school_is_it_open_tomorrow(tmp_path, clock):
     site, key = school.build(tmp_path / "school", clock)   # Saturday 14 November, 10:00 local
     http = client(site)
     agent = Agent(http)
-    assert "open_on_date" in agent.manifest["answers"], "the manifest advertises the direct answer"
+    assert any(q.get("kind") == "Hours" for q in agent.manifest["ask"]), "the direct answer is advertised"
 
     def school_day(date):
         return next(r for r in agent.get("/hours", date=date)["results"] if r["key"] == "school")
@@ -104,7 +105,7 @@ def test_game_catalogue_regional_prices_and_one_day_discount(tmp_path, clock):
     mx = {o["data"]["product"]: o["data"] for o in agent.records("Offer", region="MX")}
     assert len(mx) == 10 and mx["GAME-1"]["price"] == "1019.83" and mx["GAME-1"]["price_currency"] == "MXN"
     table = agent.get(agent.of_kind("Offer")["href"], region="JP", format="table", fields="product,price")
-    assert table["columns"] == ["product", "price"] and table["rows"][0] == ["GAME-1", "8998"]
+    assert table["columns"] == ["key", "product", "price"] and table["rows"][0][1:] == ["GAME-1", "8998"]
 
     def price(sku):
         return agent.get(f"{agent.of_kind('Product')['href']}/{sku}")
@@ -186,7 +187,7 @@ def test_private_calendar_through_the_owners_ai(tmp_path, clock):
     http = client(site)
 
     stranger = Agent(http)
-    assert stranger.manifest["structures"] == []
+    assert stranger.manifest["ask"] == [] and stranger.map["structures"] == []
     assert http.get("/collections/calendar").status_code == 404
     assert http.post("/mcp/", json={}).status_code == 401
 

@@ -19,20 +19,29 @@ from .errors import SiteError
 from .site import Site, VERSION
 
 INSTRUCTIONS = (
-    "Tools for editing one AI-sites site. Call `describe` first to see its structures and the built-in "
-    "kinds. Create structures with `define`, then use `add`, `change`, `remove` on records, `schedule` for "
-    "changes that start or revert on a date, and `confirm` when information is still true. Every tool "
-    "returns the new state. Errors carry a `hint` saying what to do instead."
+    "Tools for editing one AI-sites site. Call `describe` first: it lists the structures in short form. "
+    "Create structures with `define` (a built-in kind where one fits), then use `add`, `change`, `remove` on "
+    "records, `schedule` for changes that start or revert on a date, and `confirm` when information is still "
+    "true. `ask` shows what a visitor is told; `question` adds a question of your own. Every tool returns the "
+    "new state. Errors carry a `hint` saying what to do instead."
 )
 
 
+def tools_for(site: Site, principal: ops.Principal) -> list:
+    """The operations this caller can use. The owner has all; a role has the ones its grants name."""
+    if principal.kind != "role":
+        return list(ops.OPS.values())
+    granted = {name for g in site.role_grants(principal.role, principal.id) for name in g["ops"]} | {"describe"}
+    return [op for op in ops.OPS.values() if op.name in granted]
+
+
 def build_server(site: Site, principal: ops.Principal = ops.LOCAL) -> Server:
-    """Every caller sees the same tools; each call is checked against `principal`."""
+    """A caller is shown only the tools it can use, and each call is still checked against `principal`."""
 
     async def list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
+        allowed = await anyio.to_thread.run_sync(tools_for, site, principal)
         return types.ListToolsResult(tools=[
-            types.Tool(name=op.name, description=op.summary, input_schema=op.schema())
-            for op in ops.OPS.values()])
+            types.Tool(name=op.name, description=op.summary, input_schema=op.schema()) for op in allowed])
 
     async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         try:
@@ -41,7 +50,9 @@ def build_server(site: Site, principal: ops.Principal = ops.LOCAL) -> Server:
         except SiteError as e:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=json.dumps(e.as_dict()))], is_error=True)
-        return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(result))])
+        # The same result twice over: as data for clients that read structured results, as text for the rest.
+        return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(result))],
+                                    structured_content=result if isinstance(result, dict) else None)
 
     return Server("aisites", version=VERSION, title=site.config.get("name"), instructions=INSTRUCTIONS,
                   on_list_tools=list_tools, on_call_tool=call_tool)

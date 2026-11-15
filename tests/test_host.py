@@ -21,7 +21,8 @@ def test_sites_are_isolated_and_links_carry_their_prefix(tmp_path, clock):
     c = TestClient(Host(tmp_path, clock))
 
     m = c.get("/s/alpha/").json()
-    assert m["name"] == "Alpha" and m["structures"][0]["href"] == "/s/alpha/collections/products"
+    assert m["name"] == "Alpha" and m["ask"][0]["url"] == "http://testserver/s/alpha/ask/products"
+    assert c.get("/s/alpha/map").json()["structures"][0]["href"] == "/s/alpha/collections/products"
     assert c.get("/s/alpha").json()["name"] == "Alpha", "the trailing slash is optional"
     r = c.get("/s/alpha/collections/products/ONLY")
     assert r.json()["data"]["name"] == "Sold by alpha"

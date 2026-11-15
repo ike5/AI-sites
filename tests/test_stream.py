@@ -184,7 +184,7 @@ def test_manifest_link_and_prefixed_host(tmp_path, clock):
     site["products"].add(sku="A", name="Alpha", price="1.00")
     site.close()
     c = TestClient(Host(tmp_path, clock))
-    assert c.get("/s/alpha/").json()["links"]["stream"] == "/s/alpha/changes/stream"
+    assert c.get("/s/alpha/map").json()["links"]["stream"] == "/s/alpha/changes/stream"
     status, head, text = read(c, "/s/alpha/changes/stream?since=0")
     assert status == 200 and events(text)
     assert head["link"] == '</s/alpha/.well-known/aisite.json>; rel="describedby"'

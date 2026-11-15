@@ -68,10 +68,14 @@ class Op:
 
 
 def _list(site: Site, target: str, where=None, sort=None, limit=100, cursor=None, fields=None,
-          node=None, depth=None):
+          node=None, depth=None, q=None, **more):
     if site.describe(target)["type"] == "tree":
         return site.read_tree(target, node, depth)
-    return site.list(target, where, sort, limit, cursor, fields)
+    return site.list(target, where, sort, limit, cursor, fields, q=q, follow=more.get("with"))
+
+
+_WITH = {"type": "array", "description": 'References to attach, e.g. ["place", "place.hours"]. A collection '
+                                         "that refers back to these records can be attached by its name."}
 
 
 OPS: dict = {}
@@ -86,11 +90,17 @@ def register(*new: Op) -> None:
 
 
 register(
-    Op("describe", "Show the site's settings, structures and available kinds, or one structure's definition.",
-       lambda site, target=None: site.describe(target), {"target": _TARGET}, mutates=False),
+    Op("describe", "Show the site's settings and structures in short form, or one structure's full definition.",
+       lambda site, target=None, full=False: site.describe(target, full),
+       {"target": _TARGET,
+        "full": {"type": "boolean", "description": "With no target: every field definition and the fields of "
+                                                   "each built-in kind. Several times larger."}},
+       mutates=False),
     Op("configure", "Change site settings: name, description, timezone (region name), language, currency.",
        lambda site, **kw: site.configure(**kw),
-       {"name": _S, "description": _S, "timezone": _S, "language": _S, "currency": _S}),
+       {"name": _S, "description": _S, "timezone": _S, "language": _S, "currency": _S,
+        "url": {"type": "string", "description": "The site's full public address, used in the links it gives "
+                                                 "out. Needed only when it cannot be told from the request."}}),
     Op("define", "Create a structure: a collection (optionally of a built-in kind) or a tree.",
        lambda site, target, **kw: site.define(target, **kw),
        {"target": _TARGET,
@@ -122,13 +132,17 @@ register(
         "position": {"type": "integer", "description": "Tree only: index among siblings."}},
        ("target", "data")),
     Op("get", "Read one record (with scheduled changes and visibility), or a tree node with its subtree.",
-       lambda site, target, key: site.get(target, key), {"target": _TARGET, "key": _KEY},
+       lambda site, target, key, **more: site.get(target, key, more.get("with")),
+       {"target": _TARGET, "key": _KEY, "with": _WITH},
        ("target", "key"), mutates=False),
     Op("list", "List records with filters, sorting and paging, or read a tree.",
        _list,
        {"target": _TARGET,
         "where": {"type": "object", "description": 'Filters, e.g. {"region": "MX", "price.lt": 50, '
-                                                   '"start.gte": "today"}. Operators: .gte .gt .lte .lt .ne'},
+                                                   '"start.gte": "today", "place.city": "Madrid"}. '
+                                                   'Operators: .gte .gt .lte .lt .ne .has'},
+        "q": {"type": "string", "description": "Words to find in the record or in the names of what it refers to."},
+        "with": _WITH,
         "sort": {"type": "string", "description": "Field name, or -field for descending."},
         "limit": _I, "cursor": _S, "fields": _A,
         "node": {"type": "string", "description": "Tree only: read the subtree under this node."},

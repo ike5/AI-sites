@@ -190,7 +190,8 @@ def test_visitor_features_work_under_a_host_prefix(tmp_path, clock):
     mia.close()
     http = TestClient(Host(tmp_path, clock))
 
-    manifest = http.get("/s/lucia/").json()
+    assert http.get("/s/lucia/").json()["do"] == "http://testserver/s/lucia/actions"
+    manifest = http.get("/s/lucia/map").json()
     assert manifest["links"]["actions"] == "/s/lucia/actions" and manifest["links"]["stream"] == "/s/lucia/changes/stream"
     actions = {a["action"]: a for a in http.get("/s/lucia/actions").json()["actions"]}
     assert actions["reserve"]["href"] == "/s/lucia/actions/tables/reserve" and actions["reserve"]["needs_key"] is False

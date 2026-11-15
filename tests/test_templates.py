@@ -42,8 +42,8 @@ def test_applies_cleanly_and_reports_what_it_created(name, made):
     assert_chain_ok(site)
 
     http = client(site)
-    public = {s["name"] for s in http.get("/.well-known/aisite.json").json()["structures"]}
-    mine = {s["name"] for s in http.get("/.well-known/aisite.json", headers=auth(owner)).json()["structures"]}
+    public = {s["name"] for s in http.get("/map").json()["structures"]}
+    mine = {s["name"] for s in http.get("/map", headers=auth(owner)).json()["structures"]}
     assert mine == set(created)
     assert public == {n for n in created if site.describe(n)["access"] != "private"}
     assert site.list_keys()["keys"] == [], "a template issues no keys"
@@ -223,6 +223,6 @@ def test_calendar_is_private(made):
     site, owner = made
     apply(site, "calendar")
     http = client(site)
-    assert http.get("/.well-known/aisite.json").json()["structures"] == []
+    assert http.get("/map").json()["structures"] == []
     assert http.get("/collections/calendar").status_code == 404
     assert http.get("/collections/calendar", headers=auth(owner)).json()["total"] == 0
