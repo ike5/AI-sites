@@ -8,7 +8,7 @@ back through, and one small set of operations for whoever maintains the site, hu
 
 **Status: Milestones 1, 2 and 3 of 4.** Reading, discovery, time, the four editing doors and multi-site hosting work
 and are tested. Signed history with a verifier, redaction, and roles with an audit trail work too. Acting on a site
-(bookings, guest keys, message forms, streaming) now works. Key-based identity comes next; see [Roadmap](#roadmap).
+(bookings, guest keys, message forms, streaming) now works. Key-based identity comes next; see [Roadmap](#roadmap). A first slice of a hosted service now exists: sign up by email, create a site from a template, and connect your own AI.
 
 ## Quick start
 
@@ -36,6 +36,9 @@ $ curl 'localhost:8000/hours?date=2026-11-17'        # or date=today, date=tomor
 
 `site create` prints an owner key once. The web admin API and remote MCP need it; the command line,
 Python and local MCP work on the site folder directly.
+
+A site can also start from a template: `aisites site create ./school --name "Lincoln" --template school`.
+`aisites templates` lists them.
 
 Eight complete example sites are in [`examples/`](examples): a school, a street cart, a game catalogue
 with regional prices and a one-day discount, a pharmacy chain with stock per branch, a private
@@ -342,6 +345,19 @@ aisites serve --sites ./sites        # each subfolder is a site, served at /s/<n
 A `hosts.json` in the sites folder maps hostnames to sites: `{"school.example.org": "school"}`. Sites
 created while the server runs are picked up on first request. One site's key is not valid on another.
 
+## Hosted service
+
+A host operator can run one server that anyone may sign up to. Turn the sites folder into a host, then serve it:
+
+```
+aisites host init ./sites --name "Sitewise" --public-url http://localhost:8000 --mail-file ./outbox.jsonl
+aisites serve --sites ./sites
+```
+
+People sign up by email with a six-digit code, create a site from a template, and connect their own AI. Use
+`--mail-file` for development; real mail needs the `--smtp-*` options. The details are in
+[`docs/hosting.md`](docs/hosting.md).
+
 ## Limits you should know about
 
 - The signature proves who published the history, not that its dates are true. Independent timestamping
@@ -356,6 +372,8 @@ created while the server runs are picked up on first request. One site's key is 
 - Custom actions are not available on a multi-site host.
 - A redaction works on one history entry at a time, so each entry carrying the value needs redacting.
 - A redaction cannot recall copies that visitors already fetched.
+- Real mail delivery for the hosted service was not exercised when it was built. Check the first real send on your host.
+- A hosted service operator cannot email site owners, because it keeps only a keyed fingerprint of each address.
 
 ## Roadmap
 
@@ -365,6 +383,12 @@ created while the server runs are picked up on first request. One site's key is 
 | 2 (done) | Signed history head, checkpoints with a file anchor, verifier with pinning, redaction for legal takedowns, roles limited to structures, fields and operations, role keys, private audit trail |
 | 3 (done) | Reserving capacity through bookings, custom actions with payment hand-off, retry safety, quotas, guest keys, message forms, streaming change feed. Webhooks are not built |
 | 4 | Key-based identity: an agent proving it acts for a specific user |
+
+### Hosted service
+
+- Done: sign-up by email, templates, account keys, owner-key recovery, suspension.
+- Next: the sign-in flow for assistants that cannot send a key in a header.
+- Later: billing, custom domains, a built-in assistant.
 
 [`docs/scenarios.md`](docs/scenarios.md) maps each target scenario to a milestone.
 
