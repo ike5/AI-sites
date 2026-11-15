@@ -8,8 +8,8 @@ recovering access are the same flow. An email address is used once, to send the 
 only as a keyed fingerprint.
 
 A person's AI can start registration for them (`start_registration`): the person confirms with the
-emailed code on a page that shows a pairing phrase, and the AI then collects an account key. The phrase
-is what stops someone else's assistant registering your address and you confirming it by reflex.
+emailed code, and the AI then collects an account key. An assistant that uses the standard sign-in flow
+instead is handled in `oauth.py`.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id_hash TEXT PRIMARY KEY, account TEXT NOT NULL, csrf TEXT NOT NULL, created TEXT NOT NULL,
     expires TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tickets (
-    id TEXT PRIMARY KEY, claim_hash TEXT NOT NULL, email_hash TEXT NOT NULL, phrase TEXT NOT NULL,
+    id TEXT PRIMARY KEY, claim_hash TEXT NOT NULL, email_hash TEXT NOT NULL,
     created TEXT NOT NULL, expires TEXT NOT NULL, confirmed TEXT, account TEXT, collected TEXT);
 CREATE TABLE IF NOT EXISTS account_keys (
     id TEXT PRIMARY KEY, hash TEXT NOT NULL UNIQUE, account TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
@@ -55,13 +55,9 @@ CREATE TABLE IF NOT EXISTS sites (
 """
 
 SITE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{2,62}$")
-RESERVED = {"account", "accounts", "register", "sites", "templates", "s", "static", "admin", "api", "www",
+RESERVED = {"account", "accounts", "register", "signup", "authorize", "token", "revoke", "sites", "templates", "s", "static", "admin", "api", "www",
             "mcp", "llms", "well-known", "host", "platform", "help", "support", "login", "signup"}
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-WORDS = ("amber", "birch", "cedar", "delta", "ember", "fjord", "grove", "harbor", "indigo", "juniper", "kelp",
-         "lagoon", "maple", "nectar", "olive", "pebble", "quartz", "river", "sable", "tundra", "umber",
-         "violet", "willow", "yarrow", "zephyr", "basalt", "clover", "dune", "fern", "glacier", "heron", "iris")
-
 CODE_MINUTES = 10
 CODE_ATTEMPTS = 5
 TICKET_MINUTES = 15
@@ -183,12 +179,10 @@ class Platform:
         host = self.config["name"]
         if ticket:
             text = (f"An AI assistant asked to create and manage sites for this email address on {host}.\n\n"
-                    f"Pairing phrase: {ticket['phrase']}\n"
-                    "Your assistant should have shown you the same phrase.\n\n"
                     f"To allow it, open {self.link('/account/confirm?ticket=' + ticket['id'])}\n"
                     f"and enter this code: {code}\n\n"
-                    f"The code is valid for {CODE_MINUTES} minutes. If the phrase does not match, or you did not "
-                    "ask for this, do nothing: without the code the assistant gets no access.\n")
+                    f"The code is valid for {CODE_MINUTES} minutes. If you did not ask an assistant to do this, "
+                    "do nothing: without the code it gets no access.\n")
             subject = f"Confirm your assistant on {host}"
         else:
             text = (f"Your sign-in code for {host} is: {code}\n\n"
@@ -250,13 +244,12 @@ class Platform:
     # ------------------------------------------------------------ registration started by an AI
 
     def start_registration(self, email: str, address: str = "") -> dict:
-        ticket = {"id": "reg_" + secrets.token_hex(10),
-                  "phrase": "-".join(secrets.choice(WORDS) for _ in range(2)) + f"-{secrets.randbelow(90) + 10}"}
+        ticket = {"id": "reg_" + secrets.token_hex(10)}
         claim = secrets.token_urlsafe(24)
         email_hash = self.fingerprint(email)
         expires = self._later(minutes=TICKET_MINUTES)
-        self.store.x("INSERT INTO tickets (id, claim_hash, email_hash, phrase, created, expires) VALUES (?,?,?,?,?,?)",
-                     (ticket["id"], _sha(claim), email_hash, ticket["phrase"], self.now_z(), expires))
+        self.store.x("INSERT INTO tickets (id, claim_hash, email_hash, created, expires) VALUES (?,?,?,?,?)",
+                     (ticket["id"], _sha(claim), email_hash, self.now_z(), expires))
         self.store.x("DELETE FROM tickets WHERE expires <= ?", (self._later(days=-1),))
         try:
             self.send_code(email, address, ticket)
@@ -264,11 +257,11 @@ class Platform:
             self.store.x("DELETE FROM tickets WHERE id=?", (ticket["id"],))
             raise
         return {
-            "ticket": ticket["id"], "claim": claim, "pairing_phrase": ticket["phrase"], "expires": expires,
+            "ticket": ticket["id"], "claim": claim, "expires": expires,
             "confirm_at": self.link("/account/confirm?ticket=" + ticket["id"]),
-            "collect_at": self.link("/register/" + ticket["id"]),
+            "collect_at": self.link("/signup/" + ticket["id"]),
             "tell_the_person": f"I've asked {self.config['name']} to email you a code. Open the confirmation "
-                               f"page, check it shows the phrase \"{ticket['phrase']}\", and enter the code.",
+                               "page from that email and enter the code to let me create your site.",
             "next": "After they confirm, GET collect_at with the header Authorization: Bearer <claim> to "
                     "receive an account key. Until then it answers with status pending.",
         }
@@ -277,15 +270,14 @@ class Platform:
         row = self.store.one("SELECT * FROM tickets WHERE id=?", (str(ticket_id or ""),))
         if row is None or row["expires"] <= self.now_z():
             raise SiteError("no_ticket", "That registration has expired or does not exist.",
-                            "Start again with POST /register.", status=404)
+                            "Start again with POST /signup.", status=404)
         return row
 
-    def ticket_phrase(self, ticket_id: Any) -> str:
-        row = self._ticket(ticket_id)
-        if row["confirmed"]:
+    def check_ticket(self, ticket_id: Any) -> None:
+        """Refuse a registration that has expired, does not exist, or was already confirmed."""
+        if self._ticket(ticket_id)["confirmed"]:
             raise SiteError("already_confirmed", "This registration was already confirmed.",
                             "Return to your assistant.", status=409)
-        return row["phrase"]
 
     def confirm_registration(self, ticket_id: Any, code: Any) -> None:
         row = self._ticket(ticket_id)
@@ -302,7 +294,7 @@ class Platform:
             raise SiteError("bad_claim", "That is not the claim secret this registration was started with.",
                             "Send it as: Authorization: Bearer <claim>", status=401)
         if not row["confirmed"]:
-            return {"status": "pending", "pairing_phrase": row["phrase"], "expires": row["expires"]}
+            return {"status": "pending", "expires": row["expires"]}
         with self.store.tx():
             done = self.store.x("UPDATE tickets SET collected=? WHERE id=? AND collected IS NULL",
                                 (self.now_z(), row["id"]))
@@ -447,9 +439,9 @@ class Platform:
             "register": {
                 "by_a_person": self.link("/account"),
                 "by_an_ai": [
-                    "POST " + self.link("/register") + " with {\"email\": \"<the person's address>\"}.",
-                    "Tell the person the pairing_phrase and the confirm_at address from the answer. They "
-                    "receive a code by email and enter it there.",
+                    "POST " + self.link("/signup") + " with {\"email\": \"<the person's address>\"}.",
+                    "Tell the person to open the confirmation page from the email they receive and enter "
+                    "the code in it. The answer's confirm_at is that page's address.",
                     "GET the collect_at address with Authorization: Bearer <claim> until it returns an "
                     "account_key.",
                     "POST " + self.link("/sites") + " with {\"name\": ..., \"template\": ...} and the "

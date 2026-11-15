@@ -34,9 +34,9 @@ def code_in(mailer):
 
 def register(http, mailer, email=ANA):
     """Play both the AI and the person: returns an account key."""
-    started = http.post("/register", json={"email": email}).json()
+    started = http.post("/signup", json={"email": email}).json()
     assert http.post("/account/confirm", data={"ticket": started["ticket"], "code": code_in(mailer)}).status_code == 200
-    return http.get(f"/register/{started['ticket']}", headers=auth(started["claim"])).json()["account_key"]
+    return http.get(f"/signup/{started['ticket']}", headers=auth(started["claim"])).json()["account_key"]
 
 
 def sign_in(http, mailer, email=ANA):
@@ -109,16 +109,16 @@ def test_codes_are_single_use_short_lived_and_limited_in_attempts(hosted, clock)
 def test_code_requests_are_limited(hosted, clock):
     _, mailer, http = hosted
     for _ in range(5):
-        assert http.post("/register", json={"email": ANA}).status_code == 200
-    r = http.post("/register", json={"email": ANA})
+        assert http.post("/signup", json={"email": ANA}).status_code == 200
+    r = http.post("/signup", json={"email": ANA})
     assert r.status_code == 429 and r.json()["error"]["code"] == "too_many_codes" and r.headers["retry-after"] == "3600"
     assert len(mailer.sent) == 5, "a refused request sends nothing"
     for i in range(15):
-        assert http.post("/register", json={"email": f"p{i}@example.org"}).status_code == 200
-    assert http.post("/register", json={"email": "one-more@example.org"}).status_code == 429, \
+        assert http.post("/signup", json={"email": f"p{i}@example.org"}).status_code == 200
+    assert http.post("/signup", json={"email": "one-more@example.org"}).status_code == 429, \
         "one network address cannot make the host mail the world"
     clock.advance(hours=1, minutes=1)
-    assert http.post("/register", json={"email": ANA}).status_code == 200
+    assert http.post("/signup", json={"email": ANA}).status_code == 200
 
 
 # ---------------------------------------------------------------- registration started by an AI
@@ -126,24 +126,23 @@ def test_code_requests_are_limited(hosted, clock):
 def test_ai_starts_registration_and_person_confirms(hosted):
     platform, mailer, http = hosted
     described = http.get("/").json()
-    assert described["register"]["by_an_ai"][0].startswith("POST https://host.example/register")
+    assert described["register"]["by_an_ai"][0].startswith("POST https://host.example/signup")
 
-    started = http.post("/register", json={"email": ANA}).json()
+    started = http.post("/signup", json={"email": ANA}).json()
     assert started["confirm_at"] == f"https://host.example/account/confirm?ticket={started['ticket']}"
-    assert re.fullmatch(r"[a-z]+-[a-z]+-\d\d", started["pairing_phrase"])
-    assert started["pairing_phrase"] in started["tell_the_person"]
+    assert "pairing_phrase" not in started and started["collect_at"] == f"https://host.example/signup/{started['ticket']}"
     email = mailer.sent[-1]
-    assert started["pairing_phrase"] in email["text"] and started["confirm_at"] in email["text"]
+    assert started["confirm_at"] in email["text"] and "If you did not ask an assistant" in email["text"]
     assert started["claim"] not in email["text"], "the claim secret stays with the AI"
 
-    collect = f"/register/{started['ticket']}"
+    collect = f"/signup/{started['ticket']}"
     assert http.get(collect).status_code == 401
     assert http.get(collect, headers=auth("guess")).json()["error"]["code"] == "bad_claim"
     pending = http.get(collect, headers=auth(started["claim"]))
     assert pending.status_code == 202 and pending.json()["status"] == "pending"
 
     page = http.get("/account/confirm", params={"ticket": started["ticket"]})
-    assert started["pairing_phrase"] in page.text and "Only continue if your own assistant" in page.text
+    assert "Only continue if you asked your own assistant" in page.text
     assert http.post("/account/confirm", data={"ticket": started["ticket"], "code": "000000"}).status_code == 401
     assert http.get(collect, headers=auth(started["claim"])).status_code == 202, "a wrong code confirms nothing"
     assert http.post("/account/confirm", data={"ticket": started["ticket"], "code": code_in(mailer)}).status_code == 200
@@ -157,19 +156,19 @@ def test_ai_starts_registration_and_person_confirms(hosted):
 
 def test_codes_cannot_cross_between_a_ticket_and_a_browser_sign_in(hosted, clock):
     _, mailer, http = hosted
-    started = http.post("/register", json={"email": ANA}).json()
+    started = http.post("/signup", json={"email": ANA}).json()
     ticket_code = code_in(mailer)
     r = http.post("/account/session", data={"email": ANA, "code": ticket_code}, follow_redirects=False)
     assert r.status_code == 401, "a code mailed for an assistant does not sign a browser in"
 
-    other = http.post("/register", json={"email": BO}).json()
+    other = http.post("/signup", json={"email": BO}).json()
     http.post("/account/code", data={"email": BO})
     browser_code = code_in(mailer)
     assert http.post("/account/confirm", data={"ticket": other["ticket"], "code": browser_code}).status_code == 401, \
         "nor does a browser sign-in code confirm an assistant"
 
     clock.advance(minutes=16)
-    assert http.get(f"/register/{started['ticket']}", headers=auth(started["claim"])).status_code == 404
+    assert http.get(f"/signup/{started['ticket']}", headers=auth(started["claim"])).status_code == 404
     assert http.get("/account/confirm", params={"ticket": started["ticket"]}).status_code == 404
     assert http.get("/account/confirm", params={"ticket": "reg_nothing"}).status_code == 404
 
@@ -344,7 +343,7 @@ def test_host_describes_itself_to_ais(hosted):
     assert described["name"] == "Test Host" and described["sites_per_account"] == 3
     assert len(described["register"]["by_an_ai"]) == 4 and described["templates"] == "https://host.example/templates"
     text = http.get("/llms.txt").text
-    assert text.startswith("# Test Host") and "`restaurant`" in text and "POST https://host.example/register" in text
+    assert text.startswith("# Test Host") and "`restaurant`" in text and "POST https://host.example/signup" in text
     assert "<dl>" in http.get("/", headers={"Accept": "text/html"}).text
     missing = http.get("/no/such/page")
     assert missing.status_code == 404 and "/s/<name>/" in missing.json()["error"]["hint"]
@@ -388,5 +387,5 @@ def test_a_plain_sites_folder_is_not_a_hosted_service(tmp_path, clock):
     http = TestClient(Host(tmp_path, clock))
     for path in ("/", "/account", "/templates", "/sites"):
         assert http.get(path).status_code == 404, path
-    assert http.post("/register", json={"email": ANA}).status_code == 404
+    assert http.post("/signup", json={"email": ANA}).status_code == 404
     assert http.get("/s/alpha/").json()["name"] == "Alpha"

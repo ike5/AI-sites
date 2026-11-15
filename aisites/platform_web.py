@@ -29,8 +29,6 @@ button { font: inherit; padding: 8px 14px; margin-top: 14px; border: 1px solid v
   background: var(--fg); color: var(--bg); cursor: pointer; display: block; }
 button.quiet { background: transparent; color: var(--fg); margin-top: 0; padding: 4px 10px; display: inline-block; }
 h2 { font-size: 1.1rem; margin: 28px 0 8px; }
-.phrase { font: 600 1.4rem ui-monospace, monospace; padding: 10px 14px; border: 1px solid var(--line);
-  border-radius: 6px; display: inline-block; }
 .secret { font: 0.95rem ui-monospace, monospace; padding: 10px 14px; border: 1px solid var(--line);
   border-radius: 6px; overflow-wrap: anywhere; }
 .warn { border-left: 3px solid #c77700; padding: 6px 12px; margin: 12px 0; }
@@ -66,7 +64,7 @@ def create_platform_app(platform: Platform) -> FastAPI:
         account = platform.account_for_key(bearer(request))
         if account is None:
             raise SiteError("needs_key", "This needs an account key.",
-                            "Register at POST /register, or issue a key on the account page, and send it as "
+                            "Sign up at POST /signup, or issue a key on the account page, and send it as "
                             "Authorization: Bearer <account key>.", status=401)
         return account
 
@@ -143,13 +141,13 @@ def create_platform_app(platform: Platform) -> FastAPI:
         return JSONResponse({"templates": templates.describe(),
                              "use": "POST /sites with {\"name\": ..., \"template\": <name>} and an account key."})
 
-    @app.post("/register")
-    async def register(request: Request):
+    @app.post("/signup")
+    async def signup(request: Request):
         data = await json_of(request)
         out = await run_in_threadpool(platform.start_registration, data.get("email"), address(request))
         return JSONResponse(out)
 
-    @app.get("/register/{ticket}")
+    @app.get("/signup/{ticket}")
     async def collect(request: Request, ticket: str):
         out = await run_in_threadpool(platform.collect, ticket, bearer(request))
         return JSONResponse(out, status_code=200 if out["status"] == "confirmed" else 202)
@@ -308,11 +306,10 @@ def create_platform_app(platform: Platform) -> FastAPI:
     @app.get("/account/confirm")
     def confirm_page(request: Request):
         ticket = request.query_params.get("ticket", "")
-        phrase = platform.ticket_phrase(ticket)
+        platform.check_ticket(ticket)
         body = (
             "<p>An AI assistant asked to create and manage sites for your email address on this host.</p>"
-            f"<p>It should have shown you this phrase:</p><p class='phrase'>{escape(phrase)}</p>"
-            "<p class='warn'>Only continue if your own assistant showed you exactly this phrase. Confirming "
+            "<p class='warn'>Only continue if you asked your own assistant to do this just now. Confirming "
             "gives that assistant a key to create and manage your sites here.</p>"
             f"<form method='post' action='{base(request)}/account/confirm'>"
             f"<input type='hidden' name='ticket' value='{escape(ticket, quote=True)}'>"
