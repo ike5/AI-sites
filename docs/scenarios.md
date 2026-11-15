@@ -22,6 +22,8 @@ designed; if it cannot be, that gap is the thing to discuss.
 | An agent is told when something changes (snow day, service disruption) | 3 | `/changes/stream` (server-sent events) on top of `/changes` | — | `test_change_made_while_open_is_delivered` |
 | Someone signs up on a host and gets a site their own AI builds | Hosted service | Email one-time code, AI-started sign-up, templates, account key, owner-key recovery | — | `test_ai_starts_registration_and_person_confirms` |
 | An assistant that only accepts a sign-in flow connects to a site | Hosted service | Standard sign-in flow (OAuth 2.1), approval page, one site per connection, Disconnect | — | `test_whole_flow_from_a_person_who_is_not_signed_in` |
+| An assistant that can only follow links finds where a product is in stock and whether that branch is open | Reader standard | Questions with options, full links, offers attached to place and hours | `examples/pharmacy.py` | `test_level_1_reaches_the_pharmacy_answer_in_three_requests` |
+| An assistant asks several things in one request and only gets what changed | Reader standard | `/ask/a,b`, `POST /ask`, ask by kind, `unless=<tag>`, `max` | — | `test_several_questions_in_one_request` |
 
 ## Planned
 
@@ -41,3 +43,4 @@ designed; if it cannot be, that gap is the thing to discuss.
 | Finding sites in the first place | A directory or search index, outside the framework |
 | Facts vouched for by a third party (parent at this school, over 18) | Credentials from trusted issuers |
 | An agent is called back when something changes (webhooks) | Outbound requests tied to an accountable caller |
+| One question asked across every site on a host (price comparison in one request) | A host-level `/ask` that fans out to its sites |

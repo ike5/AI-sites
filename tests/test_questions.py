@@ -409,6 +409,23 @@ def test_questions_through_every_door(chemist, capsys):
     assert [e["op"] for e in trail[:2]] == ["question", "question"], "defining and removing are in the audit trail"
 
 
+def test_fields_may_be_called_anything(tmp_path, clock):
+    """Field names end up in addresses; none of them may collide with how answers are built."""
+    site, _ = Site.create(tmp_path / "s", name="Odd", clock=clock)
+    site.define("things", fields=["name", "qid", "out", "label", "params", "self", "cursor_note"])
+    for key in ("a", "b"):
+        site["things"].add({"id": key, "name": key.upper(), "qid": "1", "out": "x", "label": "l", "params": "p",
+                            "self": "s"})
+    http = client(site)
+    for path in ("/ask/things?qid=1", "/ask/things?out=x", "/ask/things?label=l&params=p&self=s&limit=1",
+                 "/ask/things", "/ask/things?qid=1&max=250", "/ask/things?qid=1&format=table&links=0"):
+        assert http.get(path).status_code == 200, path
+    page = http.get("/ask/things?qid=1&limit=1").json()
+    assert "qid=1" in page["next"] and http.get(page["next"]).json()["items"][0]["key"] == "b"
+    site.question("odd", does="Odd", read="things", takes=["label"], options="label")
+    assert http.get("/ask/odd").json()["options"] == [{"label": "l", "url": f"{BASE}/ask/odd?label=l"}]
+
+
 # ---------------------------------------------------------------- full addresses
 
 def test_links_are_full_addresses_on_a_host(tmp_path, clock):

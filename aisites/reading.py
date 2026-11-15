@@ -119,6 +119,7 @@ class Reading:
         self.now_dt, self.now = site.now(), site.now_z()
         self.defs = site._defs()
         self._views: dict = {}
+        self._links: dict = {}
         self._hours: Optional[dict] = None
 
     # -- what this reader may reach
@@ -140,6 +141,11 @@ class Reading:
 
     def links(self, sdef: StructureDef, root: bool) -> dict:
         """Every link out of a structure: its own reference fields, and collections that refer back to it."""
+        if (sdef.name, root) not in self._links:
+            self._links[(sdef.name, root)] = self._find_links(sdef, root)
+        return self._links[(sdef.name, root)]
+
+    def _find_links(self, sdef: StructureDef, root: bool) -> dict:
         hide = self.hidden(sdef, root)
         out: dict = {}
         for f in sdef.fields:

@@ -67,13 +67,17 @@ class _Asker:
         self.site, self.owner, self.base, self.links = site, owner, base, links
         self.look = reading.Reading(site, owner)
 
-    def url(self, qid: str, **params: Any) -> str:
-        query = urlencode({k: v for k, v in params.items() if v is not None})
+    # What is added to an address is passed as a dict, never as keywords: its names come from the site's
+    # own fields, which may be called anything.
+
+    def url(self, qid: str, params: Optional[dict] = None) -> str:
+        query = urlencode({k: v for k, v in (params or {}).items() if v is not None})
         return f"{self.base}/ask/{qid}" + ("?" + query if query else "")
 
-    def option(self, qid: str, label: str, **params: Any) -> dict:
+    def option(self, qid: str, label: str, params: dict) -> dict:
         # Without links, the value to fill in is given instead of the address that already holds it.
-        return {"label": label, "url": self.url(qid, **params)} if self.links else {"label": label, **params}
+        params = {k: v for k, v in params.items() if v is not None}
+        return {"label": label, "url": self.url(qid, params)} if self.links else {"label": label, **params}
 
     # -- which question
 
@@ -120,7 +124,7 @@ class _Asker:
         out = self.site.hours(date, args.get("key"), self.owner)
         out["results"] = [r for r in out["results"] if r["collection"] == sdef.name]
         if date in (None, "today"):
-            out["options"] = [self.option(sdef.name, "tomorrow", date="tomorrow", key=args.get("key"))]
+            out["options"] = [self.option(sdef.name, "tomorrow", {"date": "tomorrow", "key": args.get("key")})]
         return out
 
     def tree(self, sdef: StructureDef, args: dict) -> dict:
@@ -129,7 +133,7 @@ class _Asker:
         level = out["nodes"][0].get("children", []) if node is not None and out["nodes"] else out["nodes"]
         if node is None:
             out = {"tree": sdef.name, "as_of": out["as_of"]}
-        options = [self.option(sdef.name, n["label"], node=n["id"]) for n in level
+        options = [self.option(sdef.name, n["label"], {"node": n["id"]}) for n in level
                    if node is None or n.get("children_count")]
         if options:
             out.update({"choose": "node", "options": options})
@@ -156,7 +160,7 @@ class _Asker:
                                  self.owner, q)
             if "booking" in sdef.settings:
                 out["book"] = f"{self.base}/bookable/{name}"
-            return self.paged(out, name, cursor, limit, q=q, **args)
+            return self.paged(out, name, cursor, limit, {"q": q, **args})
         found = self.site.list(name, args, None, limit or OPTIONS_PAGE, cursor, None, self.owner, q)
         if found["total"] == 1 and not cursor:
             return self.site.read_record(name, found["items"][0]["key"], self.owner, self.around(sdef))
@@ -166,10 +170,10 @@ class _Asker:
             for item in found["items"]:
                 item["data"] = {k: v for k, v in item["data"].items() if k not in long}
                 if self.links:
-                    item["url"] = self.url(name, key=item["key"])
-            return self.paged(found, name, cursor, limit, q=q, **args)
+                    item["url"] = self.url(name, {"key": item["key"]})
+            return self.paged(found, name, cursor, limit, {"q": q, **args})
         out = {"choose": "key", "total": found["total"], "as_of": found["as_of"],
-               "options": [self.option(name, reading.label_of(sdef, v), key=v["key"]) for v in found["items"]]}
+               "options": [self.option(name, reading.label_of(sdef, v), {"key": v["key"]}) for v in found["items"]]}
         if "next" in found:
             out["next"] = found["next"]
         return self.paged(out, name, cursor, limit)
@@ -207,7 +211,7 @@ class _Asker:
         out = self.site.list(sdef.name, where, None, limit or OPTIONS_PAGE, cursor, fields, self.owner, q, follow)
         if fmt == "table":
             out = reading.table(out, sdef, [f for f in fields if "." not in f], [f for f in fields if "." in f])
-        return self.paged(out, sdef.name, cursor, limit, q=q, **where)
+        return self.paged(out, sdef.name, cursor, limit, {"q": q, **where})
 
     def choose_product(self, sdef: StructureDef, limit: Any, cursor: Any) -> dict:
         offered = sorted({k for v in self.site._views(sdef, self.owner, self.look.now).values()
@@ -225,16 +229,17 @@ class _Asker:
         except (TypeError, ValueError):
             raise SiteError("bad_page", "limit and cursor must be whole numbers.")
         out = {"choose": name, "total": len(labelled), "as_of": self.look.now,
-               "options": [self.option(qid, label, **{name: key}) for label, key in labelled[offset:offset + size]]}
+               "options": [self.option(qid, label, {name: key}) for label, key in labelled[offset:offset + size]]}
         if offset + size < len(labelled):
             out["next"] = str(offset + size)
         return self.paged(out, qid, cursor, limit)
 
-    def paged(self, out: dict, qid: str, cursor: Any, limit: Any, **params: Any) -> dict:
+    def paged(self, out: dict, qid: str, cursor: Any, limit: Any, params: Optional[dict] = None) -> dict:
         """Remember how to reach the rest, as a link a reader can follow rather than a number to fill in."""
-        out["_page"] = (qid, int(cursor or 0), {**params, "limit": limit})
-        if "next" in out:
-            out["next"] = self.url(qid, **params, limit=limit, cursor=out["next"]) if self.links else out["next"]
+        params = {**(params or {}), "limit": limit}
+        out["_page"] = (qid, int(cursor or 0), params)
+        if "next" in out and self.links:
+            out["next"] = self.url(qid, {**params, "cursor": out["next"]})
         return out
 
     # -- questions the owner defined
@@ -266,7 +271,7 @@ class _Asker:
             own = [f for f in fields or [] if "." not in f] or \
                 [f.name for f in sdef.fields if f.name not in self.look.hidden(sdef, True)]
             out = reading.table(out, sdef, own, [f for f in fields or [] if "." in f])
-        return self.paged(out, qid, cursor, limit, q=q, **args)
+        return self.paged(out, qid, cursor, limit, {"q": q, **args})
 
 
 def _fit(out: dict, most: Any, asker: _Asker) -> None:
@@ -291,7 +296,8 @@ def _fit(out: dict, most: Any, asker: _Asker) -> None:
         qid, offset, params = page
         out["cut"] = True
         rest = offset + len(out[key])
-        out["next"] = asker.url(qid, **{**params, "limit": None}, cursor=rest, max=most) if asker.links else str(rest)
+        out["next"] = asker.url(qid, {**params, "limit": None, "cursor": rest, "max": most}) \
+            if asker.links else str(rest)
 
 
 def _records(node: Any) -> Any:

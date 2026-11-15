@@ -34,6 +34,19 @@ $ curl 'localhost:8000/hours?date=2026-11-17'        # or date=today, date=tomor
              "open":false,"intervals":[],"source":"closure:…","reason":"Staff training"}],"as_of":"…"}
 ```
 
+Questions make this shorter. The first response lists a site's questions, and each one answers in one request
+with the linked records attached. With the pharmacy example (`python -m examples.pharmacy ./sites/pharmacy`,
+then `aisites serve ./sites/pharmacy`):
+
+```
+$ curl localhost:8000/                                     # the list of questions
+$ curl 'localhost:8000/ask/stock?q=ibuprofen&stock.gt=0'   # stock, with the branch and its hours today
+{"question":"stock","collection":"stock","items":[{"key":"ibuprofen-200@norte","data":{"stock":32},
+  "live_as_of":"…","with":{"product":{…},"place":{…}}}],"total":1,"as_of":"…"}
+```
+
+The whole reader standard is in [`docs/standard.md`](docs/standard.md).
+
 `site create` prints an owner key once. The web admin API and remote MCP need it; the command line,
 Python and local MCP work on the site folder directly.
 
@@ -67,6 +80,7 @@ Everything is built from four structures and one set of operations. The full gui
 | Access | `set_role`, `drop_role`, `issue_key`, `revoke_key`, `list_keys`, `audit` |
 | Visitor actions | `reserve`, `book`, `release`, `booking`, `submit`, `ticket` |
 | Bookings and messages | `bookings`, `inbox`, `read_message`, `reply` |
+| Questions | `ask`, `question`, `find` |
 
 Structures are defined as data, not code, so an AI can create them and a host can serve many sites
 without running anyone's Python.
@@ -152,19 +166,24 @@ A change outside the grant is refused with HTTP status 403:
 Every operation that changes the site is written to a private audit trail, whether it succeeded or was refused:
 time, who, role, operation, target, record key, the names of the fields set, and the outcome. Values are never
 recorded. `who` is a key id, `owner` or `local`. The trail never appears in the public history, the change feed
-or the manifest. Read it with `aisites audit --who <key id, owner or local> --target <structure> --limit 20`.
+or the map. Read it with `aisites audit --who <key id, owner or local> --target <structure> --limit 20`.
 
 ## What a visiting agent gets
 
 | Route | Purpose |
 |---|---|
-| `GET /.well-known/aisite.json` (also `/`) | Manifest: every structure with its kind, schema link and access |
-| `GET /llms.txt` | The same overview as Markdown |
-| `GET /collections/{name}` | Records. Filters `field=value`, `.gte .gt .lte .lt .ne`; `sort`, `limit`, `cursor`, `fields`, `format=table` |
-| `GET /collections/{name}/{key}` | One record with `updated`, `confirmed`, `live_as_of`, `next_change` |
+| `GET /.well-known/aisite.json` (also `/`) | First response: the list of questions (`ask`), each with its `url` and what it takes |
+| `GET /ask` | Every question, with what each takes |
+| `GET /ask/{id}` | Answers a question; with nothing added, lists its options as links |
+| `POST /ask` | Several questions in one request: `{"ask": [{"id": ..., ...}]}` |
+| `GET /find?q=` | Records anywhere on the site matching words, up to 10 by default |
+| `GET /map` | Every structure with its fields, where each reference leads, and its `actions` |
+| `GET /llms.txt` | The questions as Markdown links |
+| `GET /collections/{name}` | Records. Filters `field=value`, `.gte .gt .lte .lt .ne`, `field.has=words`, `place.city=` through a reference; `q=words`; `with=` attaches linked records; `sort`, `limit`, `cursor`, `fields`, `format=table` |
+| `GET /collections/{name}/{key}` | One record with `updated`, `confirmed`, `live_as_of`, `next_change`; `with=` attaches linked records |
 | `GET /collections/{name}/schema` | JSON Schema with `x-type`, `x-property`, `x-history`, `x-choices` |
 | `GET /trees/{name}` | A tree; `node=` for a subtree, `depth=` to limit it |
-| `GET /hours?date=` | Open or closed on a date (`today`, `tomorrow`, `YYYY-MM-DD`) |
+| `GET /hours?date=` | Open or closed on a date (`today`, `tomorrow`, `YYYY-MM-DD`), with `next_change` |
 | `GET /changes?since=` | What changed since a cursor |
 | `GET /changes/stream` | The same feed as server-sent events; resumes from `since=` or `Last-Event-ID` |
 | `GET /actions` | Every action a visitor can take, per structure, with its arguments as JSON Schema |
@@ -178,7 +197,7 @@ or the manifest. Read it with `aisites audit --who <key id, owner or local> --ta
 
 - Reads are never limited by quotas. The change stream allows 5 open streams per network address. Every response
   has an ETag and answers `If-None-Match` with 304.
-- Every response links to the manifest, so an agent landing anywhere can find the entry point.
+- Every response links to the first response, so an agent landing anywhere can find the entry point.
 - HTML is returned only when `Accept` asks for it; it is a plain rendering of the same data.
 - Errors share one shape: `{"error": {"code", "message", "hint"}}`.
 
@@ -196,7 +215,8 @@ Idempotency-Key: 6f1c0d2e9a4b4c7e8f0a1b2c3d4e5f60
 ```
 
 - `GET /actions` lists every action a visitor can take, per structure, with its arguments as JSON Schema and
-  whether it needs a key. The manifest links to it (`links.actions`), and each structure lists its `actions`.
+  whether it needs a key. The first response has `do` pointing here when visitors can act. `GET /map` links to it
+  (`links.actions`), and each structure there lists its `actions`.
 - Retry safety: a changing action needs an `Idempotency-Key` header with any fresh random value. Repeating the
   same key and body returns the first answer with `Idempotent-Replay: true` and does not act twice. The same key
   with a different body gets 409 `idempotency_mismatch`. Without the header the answer is 400 `needs_idempotency_key`.
@@ -375,6 +395,10 @@ assistant that uses a sign-in flow needs only the site's `mcp` address. Use
 - A redaction cannot recall copies that visitors already fetched.
 - Real mail delivery for the hosted service was not exercised when it was built. Check the first real send on your host.
 - A hosted service operator cannot email site owners, because it keeps only a keyed fingerprint of each address.
+- Level 1 (an assistant that only opens links it has been shown) rests on a rule documented for one assistant's
+  web fetch tool. No real assistant has yet been run against a site.
+- Matching is by words and their beginnings, not by meaning. A paraphrase misses unless the site lists it in `aliases`.
+- Search and attaching scan records in memory. That suits small sites, not tens of thousands of records.
 
 ## Roadmap
 
@@ -384,6 +408,11 @@ assistant that uses a sign-in flow needs only the site's `mcp` address. Use
 | 2 (done) | Signed history head, checkpoints with a file anchor, verifier with pinning, redaction for legal takedowns, roles limited to structures, fields and operations, role keys, private audit trail |
 | 3 (done) | Reserving capacity through bookings, custom actions with payment hand-off, retry safety, quotas, guest keys, message forms, streaming change feed. Webhooks are not built |
 | 4 | Key-based identity: an agent proving it acts for a specific user |
+
+### Reader standard
+
+- Done: questions with options, full links, word matching, linked reads and several questions in one request.
+  See [`docs/standard.md`](docs/standard.md).
 
 ### Hosted service
 

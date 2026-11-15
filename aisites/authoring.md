@@ -16,15 +16,15 @@ and MCP. If you are an AI editing a site, call `describe` first.
 
 | Level | Operation | Rule |
 |---|---|---|
-| Site | `describe` | Settings, structures and built-in kinds; or one structure's definition |
+| Site | `describe` | Short form by default: each structure's fields and the built-in kinds' names. `full=true` gives every field definition and each built-in kind's fields. `describe <structure>` gives one structure |
 | Site | `configure` | Change name, description, timezone, language, currency |
 | Site | `set_limits` | Owner only. Shows or sets visitor quotas: `anonymous_per_day`, `key_per_day`, `concurrent`, `trust_proxy`. Works through all doors |
 | Structure | `define` | Create a collection (optionally of a kind) or a tree. Fails if the name exists |
 | Structure | `alter` | Add or remove fields, change access or description, set references |
 | Structure | `drop` | Delete it and its contents. Fails if another structure refers to it |
 | Record / node | `add` | Fails if the key exists. A missing key is generated |
-| Record / node | `get` | One record with its scheduled changes, or a node with its subtree |
-| Record / node | `list` | Filter, sort and page records; or read a tree |
+| Record / node | `get` | One record with its scheduled changes, or a node with its subtree. `with=` attaches linked records |
+| Record / node | `list` | Filter, sort and page records. `q=` matches words; `with=` attaches linked records. Or read a tree |
 | Record / node | `change` | Fails if the key does not exist. `null` clears a field |
 | Record / node | `remove` | Fails if the key does not exist or something refers to it |
 | Node | `move` | New parent and/or position. Fails if it would create a loop |
@@ -50,6 +50,9 @@ and MCP. If you are an AI editing a site, call `describe` first.
 | Messages | `inbox` | Lists messages without their free text, so an AI can triage. Can be granted to a role |
 | Messages | `read_message` | Returns one message in an envelope whose first entry marks the text as data from an outside party |
 | Messages | `reply` | Sends the one reply allowed per message |
+| Questions | `ask` | Asks a question as a visitor would, to check what they are told. With no id, lists the questions. Reads only |
+| Questions | `question` | Defines, replaces or removes (`--remove`) a question visitors can ask. Owner only |
+| Questions | `find` | Finds records anywhere on the site by words in their names and text. Reads only |
 
 Every operation is one transaction and returns the new state. Errors have a `code`, a `message` and
 usually a `hint` saying what to do instead.
@@ -132,17 +135,46 @@ Use a kind when one fits, so other agents know what your fields mean. Add your o
 | Kind | For | Notable fields |
 |---|---|---|
 | `Business` | Who runs the site | name, telephone, email, url |
-| `Place` | A location or branch | name, address, city, country, latitude, longitude |
+| `Place` | A location or branch | name, address, city, country, latitude, longitude, aliases |
 | `Hours` | Weekly opening pattern | weekly `{"mon": [["08:00", "15:00"]]}`, place, timezone |
 | `Closure` | Dated exception to hours | hours, start_date, end_date, closed, intervals, reason |
 | `Notice` | Announcement that expires | title, text, starts, ends, valid_from, valid_until |
 | `Page` | Prose | slug, title, body |
-| `Product` | Something for sale | sku, name, price, price_currency, stock |
+| `Product` | Something for sale | sku, name, price, price_currency, stock, aliases |
 | `Offer` | A price or stock level per region or place | product, region, place, price, price_currency, stock |
 | `Slot` | Bookable time with capacity | name, start, end, capacity, remaining |
 | `Event` | Calendar entry | title, start, end, timezone, where, with, notes |
 
 `refs` turns a field into a choice: `define offers --kind Offer --ref product=games --ref place=places`.
+
+## Questions visitors can ask
+
+Every structure is already a question: a visitor opens `/ask/<name>` and gets its records, or its options.
+These make the answers better:
+
+- Declare references with `refs` when you define a structure. A declared reference lets one request bring the
+  linked records along (`with=`), so the answer needs no second request.
+- Give `Product` and `Place` records `aliases`: other names a visitor may type. Search matches them.
+- Use `ask` to see what a visitor is told. With no id it lists the questions: `aisites ask stock q=ibuprofen`.
+- Add a question of your own with `question`. This one shows where a product is in stock, with the branch and
+  its hours:
+
+```
+aisites question in_stock --does "Where a product is in stock right now" --read stock \
+    --takes q --takes product --takes place.city --with place --with place.hours \
+    --fields stock --fields place.name --options product   stock.gt=0
+```
+
+- `does`: the one line shown in the list of questions.
+- `read`: the collection it reads.
+- `where`: filters always applied. Here, the `name=value` pair at the end (`stock.gt=0`).
+- `takes`: what the asker may add: `q`, or filter names.
+- `with`, `fields`, `sort`: what to attach, which fields to show, and the order.
+- `options`: a field in `takes` whose values are offered as links when nothing is added.
+
+A question is checked when it is defined. It runs as the least privileged reader it is for, so it can only show what
+a visitor could already read. Remove one with `--remove`. The full reader standard is in
+[`docs/standard.md`](../docs/standard.md).
 
 ## Time
 
