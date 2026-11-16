@@ -191,6 +191,13 @@ def create_platform_app(platform: Platform, host: Any = None) -> FastAPI:
                             "and try again.", status=403)
         return session
 
+    def same_origin(request: Request) -> None:
+        """Refuse a sign-in sent from another site's page, which could sign someone in to an account not theirs."""
+        origin, here = request.headers.get("origin"), platform.config["public_url"]
+        if origin and here and origin.rstrip("/") != here:
+            raise SiteError("bad_form", "That form did not come from this site.",
+                            "Open the account page here and try again.", status=403)
+
     def secure(request: Request) -> bool:
         return platform.config["public_url"].startswith("https://") or request.url.scheme == "https"
 
@@ -448,6 +455,7 @@ def create_platform_app(platform: Platform, host: Any = None) -> FastAPI:
 
     @app.post("/account/session")
     async def start_session(request: Request):
+        same_origin(request)
         data = await form_of(request)
         session = await run_in_threadpool(platform.sign_in, data.get("email", ""), data.get("code", ""))
         wanted = str(data.get("next", ""))
@@ -464,6 +472,7 @@ def create_platform_app(platform: Platform, host: Any = None) -> FastAPI:
 
     @app.post("/account/passkey/session")
     async def passkey_session(request: Request):
+        same_origin(request)
         data = await form_of(request)
         account = await run_in_threadpool(platform.passkeys.sign_in, data.get("challenge"), data.get("credential"))
         session = await run_in_threadpool(platform.start_session, account)

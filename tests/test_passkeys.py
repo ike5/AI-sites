@@ -147,6 +147,23 @@ def test_what_is_refused_when_adding_or_signing_in(world, device, clock):
     assert attempt(lambda o: device.get(o)).status_code == 303, "and the real thing still works"
 
 
+def test_sign_in_must_come_from_this_hosts_own_page(world, device):
+    add_passkey(world, device)
+    fresh = TestClient(world.host, base_url=HOST)
+    start = fresh.post("/account/passkey/options", json={}).json()
+    form = {"challenge": start["challenge_id"], "credential": json.dumps(device.get(start["options"]))}
+    elsewhere = fresh.post("/account/passkey/session", data=form, headers={"Origin": "https://evil.example"},
+                           follow_redirects=False)
+    assert elsewhere.status_code == 403 and "set-cookie" not in elsewhere.headers
+    assert fresh.post("/account/passkey/session", data=form, headers={"Origin": HOST},
+                      follow_redirects=False).status_code == 303
+    fresh.post("/account/code", data={"email": ANA})
+    code = re.search(r"\b(\d{6})\b", world.mailer.sent[-1]["text"]).group(1)
+    by_code = fresh.post("/account/session", data={"email": ANA, "code": code},
+                         headers={"Origin": "https://evil.example"}, follow_redirects=False)
+    assert by_code.status_code == 403 and "set-cookie" not in by_code.headers
+
+
 def test_sign_in_attempts_are_limited_per_address(world, device):
     fresh = TestClient(world.host, base_url=HOST)
     for _ in range(passkeys_module.CHALLENGES_PER_ADDRESS_PER_HOUR):

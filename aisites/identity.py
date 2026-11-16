@@ -524,7 +524,7 @@ ops.register(
            {"id": {"type": "string"}, "action": {"type": "string", "enum": ["approve", "block", "remove"]},
             "role": {"type": "string"},
             "public_key": {"type": "string", "description": "A new base64 Ed25519 public key, replacing a lost one."}},
-           ("id",), positional=("id",)),
+           ("id",), positional=("id",), flags={"public_key": "--public-key"}),
     ops.Op("invite", "Create a one-use invitation that makes whoever presents it an approved contact at once.",
            lambda site, **kw: site.invite(**kw),
            {"role": {"type": "string"}, "label": {"type": "string"},

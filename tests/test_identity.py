@@ -427,6 +427,22 @@ def test_on_a_host_a_key_is_replaced_by_emailed_code(tmp_path, clock):
     assert fresh.token(asked["contact"])["token"], "too many wrong guesses, and the key stays as it was"
 
 
+def test_a_host_limits_the_mail_it_sends_for_one_site(tmp_path, clock):
+    from aisites import platform as platform_module
+    mailer = MemoryMailer()
+    Platform.init(tmp_path, clock, public_url="https://host.example").close()
+    Site.create(tmp_path / "cafe", name="Buy pills at spam.example", clock=clock)[0].close()
+    host = Host(tmp_path, clock, mailer)
+    site = host.app_for("cafe").state.site
+    for n in range(platform_module.SITE_MAILS_PER_HOUR):
+        site.mail(f"victim{n}@example.org", "s", "t")
+    with pytest.raises(SiteError) as e:
+        site.mail("one-more@example.org", "s", "t")
+    assert code_of(e) == "too_many" and len(mailer.sent) == platform_module.SITE_MAILS_PER_HOUR
+    clock.advance(hours=2)
+    site.mail("later@example.org", "s", "t")
+
+
 # ---------------------------------------------------------------- the owner's side through every door
 
 def test_the_owners_operations_through_the_doors(cafe, clock, capsys):

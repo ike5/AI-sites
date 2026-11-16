@@ -92,6 +92,7 @@ TICKET_MINUTES = 15
 SESSION_DAYS = 30
 CODES_PER_EMAIL_PER_HOUR = 5
 CODES_PER_ADDRESS_PER_HOUR = 20
+SITE_MAILS_PER_HOUR = 20
 DEFAULTS = {"name": "AI-sites host", "public_url": "", "sites_per_account": 3, "mail": {},
             # Let an assistant identify itself by the address of a document it publishes (fetched by this host).
             "client_metadata_urls": True,
@@ -182,6 +183,24 @@ class Platform:
 
     def _later(self, **delta: Any) -> str:
         return timeview.to_z(self.now() + timedelta(**delta))
+
+    def send_for_site(self, name: str, to: str, subject: str, text: str) -> None:
+        """Send one message on behalf of a site this host serves, within a limit per site.
+
+        A site's owner chooses its name and can cause these messages, so without a limit a site could be
+        used to send mail of its owner's choosing through the host.
+        """
+        who, since = self._mac("site-mail", name), self._later(hours=-1)
+        with self.store.tx():
+            self.store.x("DELETE FROM requests WHERE at < ?", (since,))
+            used = self.store.one("SELECT COUNT(*) AS n FROM requests WHERE who=? AND at >= ?", (who, since))["n"]
+            if used >= SITE_MAILS_PER_HOUR:
+                err = SiteError("too_many", "This site has sent as much mail as it may for now.",
+                                "Try again in an hour.", status=429)
+                err.retry_after = 3600
+                raise err
+            self.store.x("INSERT INTO requests (who, at) VALUES (?,?)", (who, self.now_z()))
+        self.mailer.send(to, subject, text)
 
     def _mac(self, *parts: str) -> str:
         return hmac.new(self._secret, "|".join(parts).encode(), hashlib.sha256).hexdigest()
