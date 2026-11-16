@@ -100,6 +100,38 @@ def game_price_in_mexico(site):
     return out
 
 
+def whole_site(site):
+    """What it costs a search engine to take a copy of everything public on a site, three ways."""
+    out = {}
+    v = Visitor(site)
+    page = v.get("/crawl")
+    while page.get("next"):
+        page = v.get(page["next"])
+    out["the crawl feed"] = v.cost()
+
+    v = Visitor(site)
+    for s in v.get("/map")["structures"]:
+        v.get(s["href"])
+    out["the map, then each collection"] = v.cost()
+
+    v = Visitor(site)
+    for q in v.get("/")["ask"]:
+        opened = v.get(q["url"])
+        for option in opened.get("options", []):
+            if option["url"].startswith(BASE + "/ask/"):
+                inner = v.get(option["url"])
+                for deeper in inner.get("options", []) if "choose" in inner else []:
+                    v.get(deeper["url"])
+    out["following question links"] = v.cost()
+
+    v = Visitor(site)
+    cursor = v.get("/crawl")["cursor"]
+    v.steps.clear()
+    v.get(f"/crawl?since={cursor}")
+    out["checking again, nothing changed"] = v.cost()
+    return out
+
+
 def measure():
     tmp = pathlib.Path(tempfile.mkdtemp())
     sites = {name: module.build(tmp / name, clock)[0]
@@ -114,6 +146,7 @@ def measure():
                                   "now": len(TestClient(create_app(site), base_url=BASE).get("/").content)}
                            for name, site in sites.items()},
     }
+    results["taking a copy of a whole site"] = {name: whole_site(site) for name, site in sites.items()}
     # Asking again when nothing has changed.
     v = Visitor(sites["pharmacy"])
     tag = v.get("/ask/Offer?q=ibuprofen&stock.gt=0&links=0")["tag"]
@@ -155,6 +188,9 @@ def report(results):
             lines.append(f"| {question} | {path} | {cost['requests']} | {cost['bytes']:,} | {cost['tokens']:,} |")
     lines += ["", "| First response | Before | Now |", "|---|---|---|"]
     lines += [f"| {name} | {v['before']:,} bytes | {v['now']:,} bytes |" for name, v in results["first response"].items()]
+    lines += ["", "| Taking a copy of a whole site | Way | Requests | Bytes |", "|---|---|---|---|"]
+    for name, ways in results["taking a copy of a whole site"].items():
+        lines += [f"| {name} | {way} | {cost['requests']} | {cost['bytes']:,} |" for way, cost in ways.items()]
     again = results["asking again, nothing changed"]
     lines += ["", f"Asking again when nothing changed: {again['full answer']:,} bytes in full, "
                   f"{again['with unless=<tag>']:,} bytes with unless=<tag>.", ""]

@@ -104,7 +104,11 @@ register(
         "url": {"type": "string", "description": "The site's full public address, used in the links it gives "
                                                  "out. Needed only when it cannot be told from the request."},
         "listed": {"description": "true or false: whether a host may include this site when one question is "
-                                  "put to every site it serves. Default true."}}),
+                                  "put to every site it serves. Default true."},
+        "search": {"description": "true or false: whether search engines may index this site to answer and "
+                                  "cite it. Default true."},
+        "training": {"description": "true or false: whether this site may be collected to train models. "
+                                    "Default true."}}),
     Op("define", "Create a structure: a collection (optionally of a built-in kind) or a tree.",
        lambda site, target, **kw: site.define(target, **kw),
        {"target": _TARGET,

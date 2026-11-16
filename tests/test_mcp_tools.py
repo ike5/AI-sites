@@ -7,7 +7,7 @@ import pytest
 from mcp import Client
 
 from aisites import Site, ops
-from aisites.mcp_door import FEATURES, build_server, features_in_use, tools_for
+from aisites.mcp_door import FEATURES, RARE, build_server, features_in_use, tools_for
 from tests.util import mcp_call, mcp_tools
 
 
@@ -21,7 +21,7 @@ def size(site):
 
 
 def test_a_plain_site_is_shown_only_what_it_can_use(site):
-    hidden = {n for group in FEATURES.values() for n in group}
+    hidden = {n for group in FEATURES.values() for n in group} | set(RARE)
     assert names(site) == set(ops.OPS) - hidden and features_in_use(site) == set()
     listed = {t.name for t in mcp_tools(site)}
     assert listed == (set(ops.OPS) - hidden) | {"other"}
@@ -52,14 +52,15 @@ def test_a_site_using_everything_lists_everything_and_needs_no_other(site):
     site.define("hours", kind="Hours")
     site.set_role("staff", [{"target": "*", "ops": ["list"]}])
     site.set_contacts(requests="open")
-    assert {t.name for t in mcp_tools(site)} == set(ops.OPS)
+    assert {t.name for t in mcp_tools(site)} == (set(ops.OPS) - set(RARE)) | {"other"}, \
+        "everything but the rarely wanted, which `other` still runs"
 
 
 def test_other_lists_and_runs_what_is_hidden(site):
     is_error, listed = mcp_call(site, "other", {})
     assert not is_error
     by_name = {o["name"]: o for o in listed["operations"]}
-    assert set(by_name) == {n for group in FEATURES.values() for n in group}
+    assert set(by_name) == {n for group in FEATURES.values() for n in group} | set(RARE)
     assert by_name["hours"]["arguments"]["properties"]["date"] and "summary" in by_name["hours"]
 
     is_error, answer = mcp_call(site, "other", {"name": "hours", "arguments": {"date": "today"}})

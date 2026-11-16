@@ -344,7 +344,9 @@ def test_host_describes_itself_to_ais(hosted):
     assert len(described["register"]["by_an_ai"]) == 4 and described["templates"] == "https://host.example/templates"
     text = http.get("/llms.txt").text
     assert text.startswith("# Test Host") and "`restaurant`" in text and "POST https://host.example/signup" in text
-    assert "<dl>" in http.get("/", headers={"Accept": "text/html"}).text
+    assert http.get("/", headers={"Accept": "text/html"}).headers["content-type"] == "application/json"
+    assert http.get("/account", headers={"Accept": "text/html"}).headers["content-type"].startswith("text/html"), \
+        "the owner's account pages are the only HTML"
     missing = http.get("/no/such/page")
     assert missing.status_code == 404 and "/s/<name>/" in missing.json()["error"]["hint"]
 

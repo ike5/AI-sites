@@ -38,6 +38,8 @@ FEATURES = {
     "roles": ("drop_role", "issue_key", "revoke_key", "list_keys"),
     "contacts": ("set_contacts", "contacts", "contact", "invite"),
 }
+# Rarely wanted while editing, so never listed; `other` still runs it.
+RARE = ("crawl",)
 OTHER = types.Tool(
     name="other",
     description="Run an operation that is not listed as a tool because this site does not use its feature yet "
@@ -70,7 +72,7 @@ def hidden_for(site: Site, principal: ops.Principal) -> list:
         return []
     used = features_in_use(site)
     return [ops.OPS[name] for feature, names in FEATURES.items() if feature not in used
-            for name in names if name in ops.OPS]
+            for name in names if name in ops.OPS] + [ops.OPS[name] for name in RARE if name in ops.OPS]
 
 
 def tools_for(site: Site, principal: ops.Principal) -> list:

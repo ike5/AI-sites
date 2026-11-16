@@ -15,7 +15,7 @@ import json
 from typing import Any, Optional
 from urllib.parse import urlencode
 
-from . import questions, reading
+from . import crawl, questions, reading
 from .errors import SiteError, not_found
 
 MAX_SITES = 50
@@ -150,6 +150,46 @@ def _fit(out: dict, most: Any, offset: int, address: Any, links: bool) -> None:
         shown = out.get("asked", before) - (before - len(out[key])) if key == "sites" else len(out[key])
         out["cut"] = True
         out["next"] = address({"cursor": offset + max(1, shown), "max": most}) if links else str(offset + max(1, shown))
+
+
+DIRECTORY_PAGE = 100
+
+
+def served(host: Any) -> list:
+    """(name, site) for every site here that is not suspended, whatever it allows. For robots.txt."""
+    out = []
+    for name in host.names():
+        if not host.platform.is_suspended(name):
+            app = host.app_for(name)
+            if app is not None:
+                out.append((name, app.state.site))
+    return out
+
+
+def findable(host: Any) -> list:
+    """Sites a search engine is pointed at: listed by their owner and open to search."""
+    return [(name, site) for name, site in _sites(host) if crawl.use_of(site)["search"]]
+
+
+def directory(host: Any, cursor: Any = None, base: str = "") -> dict:
+    """Every site this host serves that may be found, a page at a time, for a crawler that knows only the host."""
+    from .site import VERSION
+    try:
+        offset = max(0, int(cursor or 0))
+    except (TypeError, ValueError):
+        raise SiteError("bad_page", "cursor must be a whole number.")
+    platform = host.platform
+    sites = findable(host)
+    out = {"aisites_host": VERSION, "name": platform.config["name"],
+           "sites": [{"site": name, **crawl.summary(site, platform.link(f"/s/{name}"))}
+                     for name, site in sites[offset:offset + DIRECTORY_PAGE]],
+           "total": len(sites),
+           "how": "Each site's `crawl` address is everything public on it in one feed; add ?since=<cursor> "
+                  "for what changed. Each site's `use` says what it may be used for.",
+           "as_of": platform.now_z()}
+    if offset + DIRECTORY_PAGE < len(sites):
+        out["next"] = f"{base}/.well-known/aisites.json?cursor={offset + DIRECTORY_PAGE}"
+    return out
 
 
 def find(host: Any, q: Any, limit: Any = 10, base: str = "") -> dict:

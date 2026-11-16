@@ -13,17 +13,36 @@ from typing import Any, Optional
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from . import host_ask, html, templates
+from . import crawl, host_ask, templates
 from .errors import SiteError
 from .passkeys import RESET_HOURS
 from .platform import SESSION_DAYS, Platform
 from .reading import tag_of
 
 COOKIE = "aisites_session"
+# The account pages are the only HTML this project serves: they are for a site's owner, in a browser,
+# because signing in with a passkey and approving an assistant cannot be done any other way.
+STYLE = """
+:root { color-scheme: light dark; --fg: #1a1a1a; --bg: #fdfdfc; --muted: #666; --line: #ddd; --link: #0b57d0; }
+@media (prefers-color-scheme: dark) { :root { --fg: #e8e8e6; --bg: #161616; --muted: #9a9a9a; --line: #333; --link: #8ab4f8; } }
+body { font: 15px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); margin: 0; padding: 24px 16px; }
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 1.4rem; margin: 0 0 4px; }
+p.note { color: var(--muted); margin: 0 0 20px; }
+a { color: var(--link); }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; overflow-wrap: normal; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+ul { margin: 0; padding-left: 20px; }
+"""
 NEXT = re.compile(r"^req_[A-Za-z0-9_-]{10,60}$")
 FORM_STYLE = """
 form { margin: 0 0 20px; }
@@ -132,7 +151,7 @@ def _page(platform: Platform, title: str, body: str, status: int = 200, script: 
     return HTMLResponse(
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<title>{escape(title)}</title><style>{html.STYLE}{FORM_STYLE}</style></head><body><main>"
+        f"<title>{escape(title)}</title><style>{STYLE}{FORM_STYLE}</style></head><body><main>"
         f"<h1>{escape(title)}</h1><p class='note'>{escape(platform.config['name'])}</p>{body}</main>"
         + (f"<script nonce='{nonce}'>{PASSKEY_JS}</script>" if script else "") + "</body></html>",
         status_code=status, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
@@ -229,15 +248,14 @@ def create_platform_app(platform: Platform, host: Any = None) -> FastAPI:
     @app.get("/")
     def describe(request: Request):
         payload = platform.describe()
+        if host is not None:
+            payload["sites_directory"] = full(request) + "/.well-known/aisites.json"
         across = host_ask.listing(host, full(request)) if host is not None else []
         if across:
             payload["ask"] = across
             payload["asking"] = ("Open a url to see which sites answer it, or add words: " + full(request)
                                  + "/ask/Offer?q=<words> asks every site at once. Each site also answers at "
                                    "/s/<name>/ask.")
-        fmt = request.query_params.get("format")
-        if fmt == "html" or (fmt is None and "text/html" in request.headers.get("accept", "")):
-            return HTMLResponse(html.render(payload, platform.config["name"], base(request)))
         return JSONResponse(payload)
 
     @app.get("/llms.txt")
@@ -253,6 +271,22 @@ def create_platform_app(platform: Platform, host: Any = None) -> FastAPI:
         return PlainTextResponse("\n".join(lines) + "\n", media_type="text/markdown; charset=utf-8")
 
     if host is not None:
+        @app.get("/.well-known/aisites.json")
+        def site_directory(request: Request):
+            out = host_ask.directory(host, request.query_params.get("cursor"), full(request))
+            return JSONResponse(out, headers={"ETag": tag_of(out), "Cache-Control": "no-cache"})
+
+        # robots.txt only works at the root of an address, so the host speaks here for every site under it.
+        @app.get("/robots.txt")
+        def robots_txt(request: Request):
+            return PlainTextResponse(crawl.robots(full(request), [(f"/s/{n}", s) for n, s in host_ask.served(host)]))
+
+        @app.get("/sitemap.xml")
+        def sitemap_xml(request: Request):
+            sites = [(platform.link(f"/s/{n}") if platform.config["public_url"] else f"{full(request)}/s/{n}", s)
+                     for n, s in host_ask.findable(host)]
+            return Response(crawl.sitemap(sites), media_type="application/xml")
+
         @app.get("/ask")
         def ask_list(request: Request):
             return JSONResponse({"ask": host_ask.listing(host, full(request)),

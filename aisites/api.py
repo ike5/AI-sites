@@ -5,16 +5,17 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from . import html, ops, questions, reading, schema, timeview
+from . import crawl, ops, questions, reading, schema, timeview
 from .errors import SiteError
 from .reading import tag_of
 from .site import Site, VERSION
 
 RESERVED = {"limit", "cursor", "fields", "sort", "format", "q", "with"}
+VARIANTS = ("/ask", "/find", "/changes", "/history", "/actions", "/bookable", "/forms", "/identity")
 
 
 def create_app(site: Site) -> FastAPI:
@@ -53,18 +54,21 @@ def create_app(site: Site) -> FastAPI:
         return found is not None and found.kind == "owner"
 
     def headers(request: Request, etag: str) -> dict:
-        return {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Accept, Authorization",
+        head = {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Authorization",
                 "Link": f'<{prefix(request)}/.well-known/aisite.json>; rel="describedby"'}
+        # Addresses that repeat facts found elsewhere stay open to fetch but ask not to be indexed, and a
+        # site whose owner turned search off asks that of every address.
+        inside = request.url.path[len(prefix(request)):]
+        if request.url.query or inside.startswith(VARIANTS) or not crawl.use_of(site)["search"]:
+            head["X-Robots-Tag"] = "noindex"
+        return head
 
     def reply(request: Request, payload: Any, owner: bool, title: str) -> Response:
-        """JSON by default; HTML only when asked for. Every reply is cheap to revalidate."""
+        """Always JSON: a site has no pages for people. Every reply is cheap to revalidate."""
         etag = tag_of(payload)
         head = headers(request, etag)
         if request.headers.get("if-none-match") == etag:
             return Response(status_code=304, headers=head)
-        fmt = request.query_params.get("format")
-        if fmt == "html" or (fmt is None and "text/html" in request.headers.get("accept", "")):
-            return HTMLResponse(html.render(payload, title, prefix(request)), headers=head)
         return JSONResponse(payload, headers=head)
 
     @app.exception_handler(SiteError)
@@ -274,7 +278,7 @@ def create_app(site: Site) -> FastAPI:
     from . import actions, bookings, forms, identity, stream
     ctx = SimpleNamespace(prefix=prefix, base=base, token=token, principal=principal, is_owner=is_owner,
                           headers=headers, reply=reply)
-    for feature in (stream, actions, bookings, forms, questions, identity):
+    for feature in (stream, actions, bookings, forms, questions, identity, crawl):
         feature.routes(app, site, ctx)
 
     from .mcp_door import McpHttp

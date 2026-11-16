@@ -25,7 +25,7 @@ from urllib.parse import urlencode
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 
-from . import kinds, ops, reading, schema
+from . import crawl, kinds, ops, reading, schema
 from .errors import SiteError, not_found
 from .schema import StructureDef
 
@@ -412,7 +412,7 @@ def front(site: Any, owner: bool = False, base: str = "") -> dict:
     """The first thing an assistant reads: what can be asked, in as few bytes as will do."""
     from .site import VERSION
     asks = listing(site, owner, base)
-    out = {"aisites": VERSION, "format": FORMAT, **{k: v for k, v in site.config.items() if v and k != "listed"},
+    out = {"aisites": VERSION, "format": FORMAT, **{k: v for k, v in site.config.items() if v and k not in ("listed", "search", "training")},
            "ask": asks[:MAX_INLINE]}
     if len(asks) > MAX_INLINE:
         out["more_questions"] = f"{base}/ask"
@@ -423,6 +423,10 @@ def front(site: Any, owner: bool = False, base: str = "") -> dict:
                    "history": f"{base}/history"}
     if site.contact_settings["requests"] != "off":
         out["more"]["identity"] = f"{base}/identity"   # how an assistant becomes a known contact here
+    use = crawl.use_of(site)
+    out["use"] = use                                   # what the owner allows this site to be used for
+    if use["search"] or use["training"]:
+        out["more"]["crawl"] = f"{base}/crawl"         # everything public in one feed, for search engines
     out["first_published"] = site.first_published()
     out["as_of"] = site.now_z()
     return out

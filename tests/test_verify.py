@@ -156,7 +156,7 @@ def test_head_and_checkpoint_routes(made, clock):
     assert head["first_published"] == site.first_published()
     assert c.get("/history/checkpoints").json()["checkpoints"] == []
     assert c.get("/history/1").json()["op"] == "genesis", "/history/{seq} still works"
-    assert c.get("/history/head", headers={"Accept": "text/html"}).headers["content-type"].startswith("text/html")
+    assert c.get("/history/head", headers={"Accept": "text/html"}).headers["content-type"] == "application/json"
 
     etag = c.get("/history/head").headers["etag"]
     stored = site.checkpoint()

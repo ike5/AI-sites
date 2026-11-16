@@ -130,14 +130,19 @@ def test_etags_revalidate_cheaply_and_follow_time(web, clock):
     assert c.get("/hours?date=today", headers={"If-None-Match": tag}).status_code == 200, "a new day, a new answer"
 
 
-def test_html_only_when_asked(web):
+def test_a_site_never_answers_in_html(web):
+    """A site has no pages for people: whatever a browser asks for, it gets the same JSON an assistant gets."""
     _, _, c = web
-    assert c.get("/collections/games").headers["content-type"] == "application/json"
-    page = c.get("/collections/games", headers={"Accept": "text/html,*/*"})
-    assert page.headers["content-type"].startswith("text/html") and "<table>" in page.text and "Game 1" in page.text
-    assert c.get("/collections/games?format=json", headers={"Accept": "text/html"}).headers["content-type"] == \
-        "application/json"
-    assert "<ul>" in c.get("/trees/genres?format=html").text
+    browser = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+    for path in ("/", "/collections/games", "/collections/games/G1", "/trees/genres", "/hours", "/ask/games",
+                 "/map", "/changes", "/history", "/history/head", "/find?q=game", "/collections/games?format=html",
+                 "/trees/genres?format=html", "/nothing/here"):
+        r = c.get(path, headers=browser)
+        assert r.headers["content-type"] == "application/json", path
+        assert "<html" not in r.text and "<table" not in r.text, path
+    assert c.get("/collections/games", headers=browser).json() == \
+        {**c.get("/collections/games").json(), "as_of": c.get("/collections/games", headers=browser).json()["as_of"]}
+    assert c.get("/llms.txt", headers=browser).headers["content-type"].startswith("text/markdown")
 
 
 def test_overview_and_openapi(web):
