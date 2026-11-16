@@ -28,6 +28,8 @@ designed; if it cannot be, that gap is the thing to discuss.
 | An assistant asks several things in one request and only gets what changed | Reader standard | `/ask/a,b`, `POST /ask`, ask by kind, `unless=<tag>`, `max` | — | `test_several_questions_in_one_request` |
 | An agent changes a user's account on their behalf | Visitor identity | Contact with a key per site, signed permission statement, one-hour token, owned records | — | `test_a_contact_sees_and_changes_only_its_own_records` |
 | A stranger's AI sends the owner a message | Visitor identity | Contact request (one fixed form), owner approval or invitation, contact role granted `submit` | — | `test_a_stranger_asks_the_owner_approves_and_the_assistant_acts` |
+| A search engine takes a copy of a site and keeps it fresh | Crawl standard | `/crawl` feed, `since=<cursor>`, field meanings stated once, signed head | `examples/pharmacy.py` | `test_since_gives_only_what_changed` |
+| An owner keeps a site out of model training but findable in search | Crawl standard | `use`, `configure training=false`, `robots.txt` by crawler name | — | `test_the_owner_states_what_is_allowed` |
 
 ## Planned
 
@@ -43,5 +45,6 @@ designed; if it cannot be, that gap is the thing to discuss.
 | Parcel or flight status by reference number | Lookup by secret reference without listing |
 | Back-and-forth conversation between two AIs | Threads; each turn is a further injection risk |
 | Finding sites in the first place | A directory or search index, outside the framework |
+| A search engine is told the moment something changes | Outbound pings tied to an accountable caller |
 | Facts vouched for by a third party (parent at this school, over 18) | Credentials from trusted issuers |
 | An agent is called back when something changes (webhooks) | Outbound requests tied to an accountable caller |

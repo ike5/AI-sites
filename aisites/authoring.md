@@ -21,8 +21,9 @@ hours, staff roles and contacts appear once the site has one of them. Until then
 | Level | Operation | Rule |
 |---|---|---|
 | Site | `describe` | Short form by default: each structure's fields and the built-in kinds' names. `full=true` gives every field definition and each built-in kind's fields. `describe <structure>` gives one structure |
-| Site | `configure` | Change name, description, timezone, language, currency, and `listed` (whether a host may include the site when one question is put to every site it serves) |
+| Site | `configure` | Change name, description, timezone, language, currency, and `listed` (whether a host may include the site when one question is put to every site it serves). `search` and `training` (true or false, both default true) say whether search engines may index the site and whether it may be collected for model training |
 | Site | `set_limits` | Owner only. Shows or sets visitor quotas: `anonymous_per_day`, `key_per_day`, `concurrent`, `trust_proxy`. Works through all doors |
+| Site | `crawl` | Shows what a search engine's crawler is given. Reads only. Through MCP it is run with `other` |
 | Structure | `define` | Create a collection (optionally of a kind) or a tree. Fails if the name exists |
 | Structure | `alter` | Add or remove fields, change access or description, set references |
 | Structure | `drop` | Delete it and its contents. Fails if another structure refers to it |
@@ -210,6 +211,13 @@ aisites set_role contact --grant '{"target": "orders", "ops": ["list", "get", "a
   role's grant names them in `fields`.
 
 The request, the permission statement and the limits are in [`docs/identity.md`](../docs/identity.md).
+
+## Search engines
+
+A site is crawlable from the start, with search and training allowed. `crawl` shows what a crawler is given.
+To opt out, use `configure search=false`, `training=false` or `listed=false`. A structure that declares a
+built-in kind gives its fields the shared meaning in the feed. The rules are in
+[`docs/crawling.md`](../docs/crawling.md).
 
 ## Time
 

@@ -90,6 +90,13 @@ that can be asked. Each site is asked as a visitor would ask it. The details are
   and restart.
 - Each site is read in turn, 50 per request. This suits tens of sites.
 
+## Being found
+
+The host's directory (`GET /.well-known/aisites.json`), `robots.txt` and sitemap cover every site it serves.
+A site is left out if it is suspended, or its owner set `listed=false` or `search=false`. Each site's wishes
+about training and search are written into the host's `robots.txt` by path (`/s/<name>/`). The details are in
+[`crawling.md`](crawling.md).
+
 ## Passkeys
 
 A passkey lets a person sign in to the account page without an emailed code. The sign-in page has a "Sign in with a
@@ -223,12 +230,14 @@ The host serves these at its root, beside the sites at `/s/<name>/`.
 
 | Route | Purpose |
 |---|---|
-| `GET /` | What this host is and how to register, as JSON |
+| `GET /` | What this host is and how to register, as JSON. `sites_directory` gives the list of its sites |
 | `GET /llms.txt` | The same, as Markdown |
 | `GET /templates` | The templates, with descriptions |
 | `GET /ask` | The kinds that can be asked across the host's sites, with how many sites answer each |
 | `GET /ask/{Kind}` | One question on every site the host serves, such as `GET /ask/Offer?q=ibuprofen`; see [One question across every site](#one-question-across-every-site) |
 | `GET /find?q=` | A few matching records from each site |
+| `GET /.well-known/aisites.json` | The directory of the sites that may be found; see [Being found](#being-found) |
+| `GET /robots.txt`, `GET /sitemap.xml` | For crawlers, covering every site on the host |
 | `GET /account` | For people: sign in; then list your sites, create one, issue a new owner key for a site, issue or revoke account keys, disconnect connected assistants, add or remove passkeys, sign out |
 | `POST /signup` | For an AI: starts sign-up with `{"email": "..."}`. The answer has `ticket`, `claim`, `expires`, `confirm_at`, `collect_at`, `tell_the_person`, and `next` |
 | `GET /account/confirm?ticket=...` | For the person: takes the emailed code |

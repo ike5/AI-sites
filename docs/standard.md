@@ -23,6 +23,7 @@ header).
 {
   "aisites": "0.1", "format": 1,
   "name": "Greenleaf Pharmacy", "timezone": "Europe/Madrid", "language": "es", "currency": "EUR",
+  "use": {"search": true, "training": true},
   "ask": [
     {"id": "hours", "kind": "Hours", "does": "Open or closed on a date, with the reason and when that next changes",
      "url": "https://site.example/ask/hours", "takes": ["date", "key"],
@@ -31,7 +32,7 @@ header).
      "url": "https://site.example/ask/stock", "takes": ["q", "product", "place", "region"]}
   ],
   "how": ["1 Follow links: ...", "2 Fill in: ...", "3 Combine: ..."],
-  "more": {"find": "...", "map": "...", "changes": "...", "history": "..."},
+  "more": {"find": "...", "map": "...", "changes": "...", "history": "...", "crawl": "..."},
   "first_published": "...", "as_of": "..."
 }
 ```
@@ -43,7 +44,8 @@ header).
 | `needs` | Present when the question needs a key from the site owner |
 | `do` | Present when the site lets visitors act (book, send a message); the address lists how |
 | `more_questions` | Present when there are more than 12 questions; the address lists them all |
-| `more` | Deeper material: search, the map of structures and fields, the change feed, the verifiable history |
+| `more` | Deeper material: search, the map of structures and fields, the change feed, the verifiable history. `crawl`, the feed for search engines, when crawling is allowed |
+| `use` | What the owner allows the site to be used for: `search` and `training`. See [`crawling.md`](crawling.md) |
 
 The first response lists questions, not fields, so it stays small as a site grows.
 
@@ -132,6 +134,9 @@ including answers that change with the clock (`open_now`, anything filtered on `
 `If-None-Match` to get `304` when nothing changed. `unless=<tag>` is the same idea for an assistant that can
 only change the address it asks for.
 
+Responses for addresses that repeat facts found elsewhere (`/ask/...`, `/find`, `/changes`, `/history`, and any
+address with arguments) carry `X-Robots-Tag: noindex`. They stay open to fetch. See [`crawling.md`](crawling.md).
+
 ## What each kind answers
 
 | Kind | Opened with nothing added | With an argument |
@@ -209,6 +214,11 @@ Attached records, word matching and questions all go through the same view as a 
 reader. Private fields, private structures, hidden records and unannounced scheduled changes stay hidden at
 every level, and a filter or search on a private field is answered exactly like one on a field that does not
 exist.
+
+## For search engines
+
+A crawler reads everything public from one feed and then asks only for what changed. That is described in
+[`crawling.md`](crawling.md).
 
 ## Measured
 

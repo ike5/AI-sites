@@ -74,7 +74,7 @@ Everything is built from four structures and one set of operations. The full gui
 
 | Level | Operations |
 |---|---|
-| Site | `describe`, `configure`, `set_limits` |
+| Site | `describe`, `configure`, `set_limits`, `crawl` |
 | Structure | `define`, `alter`, `drop` |
 | Record or node | `add`, `get`, `list`, `change`, `remove`, `move` |
 | Time | `schedule`, `unschedule`, `confirm`, `hours` |
@@ -190,6 +190,8 @@ or the map. Read it with `aisites audit --who <key id, owner or local> --target 
 | `GET /find?q=` | Records anywhere on the site matching words, up to 10 by default |
 | `GET /map` | Every structure with its fields, where each reference leads, and its `actions` |
 | `GET /llms.txt` | The questions as Markdown links |
+| `GET /crawl` | Everything public in one feed for search engines; `GET /crawl?since=<cursor>` gives what changed |
+| `GET /robots.txt`, `GET /sitemap.xml` | For today's crawlers: where to start and what the owner allows |
 | `GET /collections/{name}` | Records. Filters `field=value`, `.gte .gt .lte .lt .ne`, `field.has=words`, `place.city=` through a reference; `q=words`; `with=` attaches linked records; `sort`, `limit`, `cursor`, `fields`, `format=table` |
 | `GET /collections/{name}/{key}` | One record with `updated`, `confirmed`, `live_as_of`, `next_change`; `with=` attaches linked records |
 | `GET /collections/{name}/schema` | JSON Schema with `x-type`, `x-property`, `x-history`, `x-choices` |
@@ -210,8 +212,23 @@ or the map. Read it with `aisites audit --who <key id, owner or local> --target 
 - Reads are never limited by quotas. The change stream allows 5 open streams per network address. Every response
   has an ETag and answers `If-None-Match` with 304.
 - Every response links to the first response, so an agent landing anywhere can find the entry point.
-- HTML is returned only when `Accept` asks for it; it is a plain rendering of the same data.
+- A site always answers JSON (plain text for `robots.txt`, XML for `sitemap.xml`), whatever `Accept` asks for.
+  It has no pages for people. The only HTML is the hosted service's account pages for owners.
 - Errors share one shape: `{"error": {"code", "message", "hint"}}`.
+
+## Being found by search engines
+
+A site has no pages for people, so a search engine reads its JSON. A crawler reads `GET /crawl` once, which
+holds everything public, then asks `GET /crawl?since=<cursor>` for only what changed. `/robots.txt` and
+`/sitemap.xml` say where to start.
+
+- The first response's `use` says what the site may be used for: `search` and `training`. The owner sets them
+  with `aisites configure search=false training=false`.
+- A host lists its sites at `GET /.well-known/aisites.json`.
+- Classic search (Google, Bing) indexes web pages and reads structured data only inside HTML. With no HTML,
+  expect little presence there.
+
+The rules and the limits are in [`docs/crawling.md`](docs/crawling.md).
 
 ## Acting on a site
 
@@ -408,6 +425,9 @@ A host also answers one question across every site it serves. `GET /ask/Offer?q=
 matching offers in one request, and `GET /find?q=` searches them all. See
 [`docs/standard.md`](docs/standard.md#across-a-host).
 
+The host also publishes a directory of its sites at `/.well-known/aisites.json`, with a `robots.txt` and a
+sitemap covering them. A site can opt out with `aisites configure listed=false` or `search=false`.
+
 An account can also sign in with a passkey instead of an emailed code. Once an account has a passkey, approving an
 assistant or issuing a key also needs it, so the emailed code alone cannot hand out control. A passkey needs the
 `webauthn` extra and an `https://` public address. See [Passkeys](docs/hosting.md#passkeys).
@@ -418,7 +438,8 @@ assistant or issuing a key also needs it, so the emailed code alone cannot hand 
   is not built yet.
 - `next_change` does not reveal hidden scheduled changes, so it is a hint, not a guarantee.
 - Private data on a shared host is readable by whoever runs that host.
-- The framework makes a site self-describing, not findable; there is no directory of sites.
+- The framework makes a site self-describing and crawlable, not findable on its own. A host lists the sites it
+  serves; nothing lists sites across hosts.
 - Lists are filtered in memory, which suits collections of thousands of records, not millions.
 - Callers without a key are told apart only by network address, so the per-address quota is weak against someone
   with many addresses. Contacts are told apart by their key.
@@ -436,6 +457,10 @@ assistant or issuing a key also needs it, so the emailed code alone cannot hand 
   web fetch tool. No real assistant has yet been run against a site.
 - Matching is by words and their beginnings, not by meaning. A paraphrase misses unless the site lists it in `aliases`.
 - Search and attaching scan records in memory. That suits small sites, not tens of thousands of records.
+- No search engine reads the crawl feed today. Classic search indexes web pages, so with no HTML a site expects
+  little presence there.
+- `use` is a request. It binds only crawlers that choose to honour it, and the crawler names in `robots.txt`
+  need maintaining.
 
 ## Roadmap
 
@@ -450,6 +475,12 @@ assistant or issuing a key also needs it, so the emailed code alone cannot hand 
 
 - Done: questions with options, full links, word matching, linked reads, several questions in one request, and
   asking one question across every site on a host. See [`docs/standard.md`](docs/standard.md).
+
+### Crawl standard
+
+- Done: one feed of everything public for search engines, changes with `since=`, `use` for search and training,
+  `robots.txt` and sitemaps, and a host directory. See [`docs/crawling.md`](docs/crawling.md).
+- Later: telling search engines when something changes.
 
 ### Hosted service
 
