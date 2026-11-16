@@ -22,15 +22,17 @@ designed; if it cannot be, that gap is the thing to discuss.
 | An agent is told when something changes (snow day, service disruption) | 3 | `/changes/stream` (server-sent events) on top of `/changes` | — | `test_change_made_while_open_is_delivered` |
 | Someone signs up on a host and gets a site their own AI builds | Hosted service | Email one-time code, AI-started sign-up, templates, account key, owner-key recovery | — | `test_ai_starts_registration_and_person_confirms` |
 | An assistant that only accepts a sign-in flow connects to a site | Hosted service | Standard sign-in flow (OAuth 2.1), approval page, one site per connection, Disconnect | — | `test_whole_flow_from_a_person_who_is_not_signed_in` |
+| An agent compares offers across every site on a host in one request | Hosted service | `GET /ask/Offer?q=` on the host, kinds shared across sites, `listed` | — | `test_one_request_asks_every_site` |
+| A person signs in with a passkey, and handing out control needs it | Hosted service | Passkeys, confirmation per action, lost-device wait | — | `test_with_a_passkey_handing_out_control_needs_it` |
 | An assistant that can only follow links finds where a product is in stock and whether that branch is open | Reader standard | Questions with options, full links, offers attached to place and hours | `examples/pharmacy.py` | `test_level_1_reaches_the_pharmacy_answer_in_three_requests` |
 | An assistant asks several things in one request and only gets what changed | Reader standard | `/ask/a,b`, `POST /ask`, ask by kind, `unless=<tag>`, `max` | — | `test_several_questions_in_one_request` |
+| An agent changes a user's account on their behalf | Visitor identity | Contact with a key per site, signed permission statement, one-hour token, owned records | — | `test_a_contact_sees_and_changes_only_its_own_records` |
+| A stranger's AI sends the owner a message | Visitor identity | Contact request (one fixed form), owner approval or invitation, contact role granted `submit` | — | `test_a_stranger_asks_the_owner_approves_and_the_assistant_acts` |
 
 ## Planned
 
 | Scenario | Milestone | Primitives it will use |
 |---|---|---|
-| An agent changes a user's account on their behalf | 4 | Key-based identity with a signed, time-limited permission |
-| A stranger's AI sends the owner a message | 4 | Key-based identity, approved contacts, one fixed-form contact request |
 | Payment for a booking or purchase | 3 (hand-off, delivered), later (providers) | Action returns a payment hand-off; the framework never sees card data |
 
 ## Later, not yet scheduled
@@ -43,4 +45,3 @@ designed; if it cannot be, that gap is the thing to discuss.
 | Finding sites in the first place | A directory or search index, outside the framework |
 | Facts vouched for by a third party (parent at this school, over 18) | Credentials from trusted issuers |
 | An agent is called back when something changes (webhooks) | Outbound requests tied to an accountable caller |
-| One question asked across every site on a host (price comparison in one request) | A host-level `/ask` that fans out to its sites |

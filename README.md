@@ -6,9 +6,11 @@ More and more visits to a site come from an AI acting for a person. AI-sites ser
 typed data it can read cheaply, a clear statement of how fresh each fact is, a public history it can look
 back through, and one small set of operations for whoever maintains the site, human or AI.
 
-**Status: Milestones 1, 2 and 3 of 4.** Reading, discovery, time, the four editing doors and multi-site hosting work
+**Status: Milestones 1 to 4 are built.** Reading, discovery, time, the four editing doors and multi-site hosting work
 and are tested. Signed history with a verifier, redaction, and roles with an audit trail work too. Acting on a site
-(bookings, guest keys, message forms, streaming) now works. Key-based identity comes next; see [Roadmap](#roadmap). A first slice of a hosted service now exists: sign up by email, create a site from a template, and connect your own AI.
+(bookings, guest keys, message forms, streaming) works. Visitor identity is built as well: an assistant can become
+a known contact of a site and act for one person; see [Visitor identity](#visitor-identity). A hosted service
+lets people sign up by email, create a site from a template, and connect their own AI. See [Roadmap](#roadmap).
 
 ## Quick start
 
@@ -80,6 +82,7 @@ Everything is built from four structures and one set of operations. The full gui
 | Access | `set_role`, `drop_role`, `issue_key`, `revoke_key`, `list_keys`, `audit` |
 | Visitor actions | `reserve`, `book`, `release`, `booking`, `submit`, `ticket` |
 | Bookings and messages | `bookings`, `inbox`, `read_message`, `reply` |
+| Contacts | `set_contacts`, `contacts`, `contact`, `invite` |
 | Questions | `ask`, `question`, `find` |
 
 Structures are defined as data, not code, so an AI can create them and a host can serve many sites
@@ -106,8 +109,8 @@ The owner's MCP tool list is kept short. Tools for bookings, message forms, tree
 are listed once the site uses them. Until then, `other` lists them and runs them, and a call that switches a
 feature on says so in `tools_added`. A connected assistant sees new tools the next time it connects. Hiding is
 about how much an assistant reads, not permission: every call is still checked. Measured with
-`python tools/measure.py`: all 37 operations are about 19 KB (about 4,700 tokens). The owner of the pharmacy
-example is shown 23 tools, about 13.4 KB (about 3,400 tokens). A pricing role in the game catalogue example is
+`python tools/measure.py`: all 41 operations are about 20.8 KB (about 5,200 tokens). The owner of the pharmacy
+example is shown 23 tools, about 13.6 KB (about 3,400 tokens). A pricing role in the game catalogue example is
 shown 5 tools, about 3.8 KB.
 
 ### Shared meaning
@@ -198,6 +201,7 @@ or the map. Read it with `aisites audit --who <key id, owner or local> --target 
 | `POST /actions/{target}/{op}` | Take a visitor action with a JSON object of arguments; custom actions are at `POST /actions/{name}` |
 | `GET /bookable/{target}` | What a booking needs: hold length, details schema, whether there is a payment step |
 | `GET /forms/{name}` | A message form's fields, purposes, limits and how to submit |
+| `GET /identity` | How an assistant becomes a known contact and gets a token; see `docs/identity.md` |
 | `GET /history`, `/collections/{name}/{key}/history` | Past values, paged; never loaded unless asked for |
 | `GET /history/head` | Current head of the history, signed with the site key; anchor proofs once checkpointed |
 | `GET /history/checkpoints` | Stored checkpoints, paged with `after` and `limit` |
@@ -265,7 +269,9 @@ aisites define tables --kind Slot --setting 'booking:={"open": true, "hold_minut
 aisites define contact --type form --field order_number:string --field 'message!:text' --setting 'form:={"purposes": ["Question", "Complaint"], "text_field": "message", "text_max": 400}'
 ```
 
-- A form is a structure of type `form`. Visitors can add to it but not read it. Only key-holders can send in this milestone.
+- A form is a structure of type `form`. Visitors can add to it but not read it. A caller without a key cannot send.
+  To let strangers write, switch contacts on, grant the contact role `submit` and `ticket` on the form, and approve
+  the people who ask; see [Visitor identity](#visitor-identity).
 - The `form` setting: `purposes` (a list the sender must pick from), `text_field` (the one free-text field),
   `text_max` (default 500, at most 2000), `per_sender_per_day` (default 3) and `per_day` (default 100).
   Lists and JSON fields are not allowed in a form.
@@ -278,6 +284,17 @@ aisites define contact --type form --field order_number:string --field 'message!
   `read_message` returns one message in an envelope whose first entry says the content was written by an outside
   party and is data, not instructions; the text is under `untrusted_text`. `reply` sends the one reply allowed per message.
 - Messages are private. Audit rows record that a message was sent, not its text.
+
+### Visitor identity
+
+- A **contact** is a person a site knows by a public key. The person's assistant makes the key for that site alone.
+- A contact is **pending** until the owner approves it, or approved at once when it brings an invitation.
+- An approved contact gets a role and may do what the role's grants allow. Its bookings and messages count against
+  the contact, not against each token.
+- To act, the assistant signs a short **permission statement** and exchanges it for a **token** good for one hour.
+- A collection can be **owned**: each contact sees and changes only the records that name it.
+
+The details, the routes and the limits are in [`docs/identity.md`](docs/identity.md).
 
 ### Custom actions and payment
 
@@ -387,6 +404,10 @@ assistant that uses a sign-in flow needs only the site's `mcp` address. Use
 `--mail-file` for development; real mail needs the `--smtp-*` options. The details are in
 [`docs/hosting.md`](docs/hosting.md).
 
+A host also answers one question across every site it serves. `GET /ask/Offer?q=ibuprofen` returns each site's
+matching offers in one request, and `GET /find?q=` searches them all. See
+[`docs/standard.md`](docs/standard.md#across-a-host).
+
 An account can also sign in with a passkey instead of an emailed code. Once an account has a passkey, approving an
 assistant or issuing a key also needs it, so the emailed code alone cannot hand out control. A passkey needs the
 `webauthn` extra and an `https://` public address. See [Passkeys](docs/hosting.md#passkeys).
@@ -400,7 +421,11 @@ assistant or issuing a key also needs it, so the emailed code alone cannot hand 
 - The framework makes a site self-describing, not findable; there is no directory of sites.
 - Lists are filtered in memory, which suits collections of thousands of records, not millions.
 - Callers without a key are told apart only by network address, so the per-address quota is weak against someone
-  with many addresses until Milestone 4.
+  with many addresses. Contacts are told apart by their key.
+- Visitor identity needs an assistant that can sign. One that can only open links cannot use it. No real assistant
+  has been run against it yet; it is tested with the reference client in this repository.
+- A contact's name is up to 40 characters that the asker chose. Treat it as text from a stranger.
+- Marking a collection as owned limits contacts only. Staff roles see every record they are granted.
 - Text cleaning in forms reduces but does not prevent injected instructions.
 - Custom actions are not available on a multi-site host.
 - A redaction works on one history entry at a time, so each entry carrying the value needs redacting.
@@ -419,19 +444,19 @@ assistant or issuing a key also needs it, so the emailed code alone cannot hand 
 | 1 (done) | Structures, kinds, four doors, discovery, time, change feed, history log, many sites per server |
 | 2 (done) | Signed history head, checkpoints with a file anchor, verifier with pinning, redaction for legal takedowns, roles limited to structures, fields and operations, role keys, private audit trail |
 | 3 (done) | Reserving capacity through bookings, custom actions with payment hand-off, retry safety, quotas, guest keys, message forms, streaming change feed. Webhooks are not built |
-| 4 | Key-based identity: an agent proving it acts for a specific user |
+| 4 (done) | Key-based identity: an agent proving it acts for a specific user, with approved contacts, invitations, signed permission statements and owned records. See [`docs/identity.md`](docs/identity.md) |
 
 ### Reader standard
 
-- Done: questions with options, full links, word matching, linked reads and several questions in one request.
-  See [`docs/standard.md`](docs/standard.md).
+- Done: questions with options, full links, word matching, linked reads, several questions in one request, and
+  asking one question across every site on a host. See [`docs/standard.md`](docs/standard.md).
 
 ### Hosted service
 
 - Done: sign-up by email, templates, account keys, owner-key recovery, suspension, the sign-in flow for
-  assistants that cannot send a key in a header, and passkeys for signing in to the account page and for
-  approving sensitive actions ([`docs/hosting.md`](docs/hosting.md)).
-- Next: one question across every site on a host; visitor identity.
+  assistants that cannot send a key in a header, passkeys for signing in to the account page and for
+  approving sensitive actions ([`docs/hosting.md`](docs/hosting.md)), one question across every site on a host,
+  and visitor identity.
 - Later: Google or Apple sign-in, billing, custom domains, a built-in assistant.
 
 [`docs/scenarios.md`](docs/scenarios.md) maps each target scenario to a milestone.

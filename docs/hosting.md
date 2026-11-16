@@ -226,6 +226,9 @@ The host serves these at its root, beside the sites at `/s/<name>/`.
 | `GET /` | What this host is and how to register, as JSON |
 | `GET /llms.txt` | The same, as Markdown |
 | `GET /templates` | The templates, with descriptions |
+| `GET /ask` | The kinds that can be asked across the host's sites, with how many sites answer each |
+| `GET /ask/{Kind}` | One question on every site the host serves, such as `GET /ask/Offer?q=ibuprofen`; see [One question across every site](#one-question-across-every-site) |
+| `GET /find?q=` | A few matching records from each site |
 | `GET /account` | For people: sign in; then list your sites, create one, issue a new owner key for a site, issue or revoke account keys, disconnect connected assistants, add or remove passkeys, sign out |
 | `POST /signup` | For an AI: starts sign-up with `{"email": "..."}`. The answer has `ticket`, `claim`, `expires`, `confirm_at`, `collect_at`, `tell_the_person`, and `next` |
 | `GET /account/confirm?ticket=...` | For the person: takes the emailed code |
@@ -297,6 +300,9 @@ Files in the sites folder:
   the answer is 429 with `Retry-After`.
 - **Email addresses.** An address is used once, to send the code. It is then kept only as a keyed fingerprint.
   The operator therefore cannot email site owners.
+- **Lost keys on sites.** A contact of a site on this host that gave an email address can replace a lost key with a
+  six-digit code, emailed through this host's mail settings. The site keeps only a fingerprint of the address. See
+  [`identity.md`](identity.md).
 - **Browser session.** A session lasts 30 days. Its cookie is `HttpOnly`, `SameSite=Lax`, and `Secure` over HTTPS.
   It is limited to the `/account` path, so it is never sent to the sites the host serves. Every form on the
   account page carries a per-session token.

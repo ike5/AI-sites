@@ -4,8 +4,8 @@ This is the whole model. It is the same through every door: Python, the command 
 and MCP. If you are an AI editing a site, call `describe` first.
 
 Through MCP the owner is shown only the tools the site uses. Tools for bookings, message forms, trees, opening
-hours and staff roles appear once the site has one of them. Until then, `other` lists them (with no `name`) and
-runs them (with `name` and `arguments`). Reconnect to see new tools.
+hours, staff roles and contacts appear once the site has one of them. Until then, `other` lists them (with no
+`name`) and runs them (with `name` and `arguments`). Reconnect to see new tools.
 
 ## Four structures
 
@@ -21,7 +21,7 @@ runs them (with `name` and `arguments`). Reconnect to see new tools.
 | Level | Operation | Rule |
 |---|---|---|
 | Site | `describe` | Short form by default: each structure's fields and the built-in kinds' names. `full=true` gives every field definition and each built-in kind's fields. `describe <structure>` gives one structure |
-| Site | `configure` | Change name, description, timezone, language, currency |
+| Site | `configure` | Change name, description, timezone, language, currency, and `listed` (whether a host may include the site when one question is put to every site it serves) |
 | Site | `set_limits` | Owner only. Shows or sets visitor quotas: `anonymous_per_day`, `key_per_day`, `concurrent`, `trust_proxy`. Works through all doors |
 | Structure | `define` | Create a collection (optionally of a kind) or a tree. Fails if the name exists |
 | Structure | `alter` | Add or remove fields, change access or description, set references |
@@ -44,6 +44,10 @@ runs them (with `name` and `arguments`). Reconnect to see new tools.
 | Access | `revoke_key` | Owner only. Stops the key working at once |
 | Access | `list_keys` | Owner only. Lists roles with their grants, and keys by id and label; never a secret |
 | Access | `audit` | Owner only. Reads the private audit trail, filtered by `who`, `target` and `limit` |
+| Contacts | `set_contacts` | Owner only. `requests`: `off` (default), `invite` or `open`. `purposes`: what a request must choose from. `role`: the role an approved contact gets (default `contact`) |
+| Contacts | `contacts` | Owner only. Lists contacts and waiting requests. `status` narrows to `pending`, `approved` or `blocked` |
+| Contacts | `contact` | Owner only. `action`: `approve`, `block` or `remove`. `role` changes the role; `public_key` replaces a lost key |
+| Contacts | `invite` | Owner only. Makes a one-use invitation, valid 72 hours unless `hours` says otherwise. Whoever presents it is approved at once |
 | Visitor | `reserve` | Places a hold and lowers `capacity` at once, never below zero. Unconfirmed holds release themselves |
 | Visitor | `book` | Confirms the caller's own hold with the details the owner requires. Returns a payment hand-off if configured |
 | Visitor | `release` | Cancels the caller's own hold or booking and returns the capacity |
@@ -180,6 +184,33 @@ A question is checked when it is defined. It runs as the least privileged reader
 a visitor could already read. Remove one with `--remove`. The full reader standard is in
 [`docs/standard.md`](../docs/standard.md).
 
+## People the site knows
+
+Callers without a key are told apart only by network address. Contacts are told apart by their own key, so their
+limits hold across tokens. Switch them on with the owner's commands; the role they get must exist first:
+
+```
+aisites set_role contact --grant '{"target": "tables", "ops": ["reserve", "book", "release", "booking"]}'
+aisites set_contacts --requests open --purposes "Booking question" --purposes "Order question"
+aisites contacts --status pending          # who is asking
+aisites contact ct_4e796c48104fa658 --action approve
+```
+
+- `aisites invite --label "For Ana"` makes a one-use invitation, valid 72 hours. Whoever presents it is approved at once.
+- To keep each person's records apart, mark a private collection as owned, naming the field that holds the
+  contact's id:
+
+```
+aisites define orders --access private --field contact --field item --field status \
+    --setting 'owned:={"field": "contact"}'
+aisites set_role contact --grant '{"target": "orders", "ops": ["list", "get", "add", "change"]}'
+```
+
+- A contact sees only the records whose field holds its own id. Private fields are kept from contacts unless the
+  role's grant names them in `fields`.
+
+The request, the permission statement and the limits are in [`docs/identity.md`](../docs/identity.md).
+
 ## Time
 
 - **Zones.** Use region names (`America/Los_Angeles`), never abbreviations (`PST`). A `datetime` is local
@@ -271,7 +302,8 @@ aisites set_role friends --grant '{"target":"playtimes","ops":["read","reserve",
 aisites issue_key friends --label "Sam's family"
 ```
 
-A contact form with an inbox role. Senders need a key, and the inbox role can read and answer but nothing else:
+A contact form with an inbox role. Senders need a key or an approved contact (see
+[People the site knows](#people-the-site-knows)). The inbox role can read and answer but nothing else:
 
 ```
 aisites define contact --type form --field order_number:string --field 'message!:text' --setting 'form:={"purposes": ["Order question", "Other"], "text_field": "message", "text_max": 600}'
