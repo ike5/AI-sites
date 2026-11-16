@@ -69,6 +69,17 @@ CREATE TABLE IF NOT EXISTS oauth_tokens (
     token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, connection TEXT NOT NULL, scopes TEXT NOT NULL,
     resource TEXT NOT NULL, expires TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS oauth_tokens_by_connection ON oauth_tokens (connection);
+
+-- Passkeys (passkeys.py). A proof records that a session just presented its passkey for one action.
+CREATE TABLE IF NOT EXISTS passkeys (
+    id TEXT PRIMARY KEY, account TEXT NOT NULL, public_key BLOB NOT NULL, sign_count INTEGER NOT NULL,
+    name TEXT NOT NULL, created TEXT NOT NULL, last_used TEXT);
+CREATE TABLE IF NOT EXISTS passkey_challenges (
+    id TEXT PRIMARY KEY, challenge BLOB NOT NULL, purpose TEXT NOT NULL, account TEXT, action TEXT NOT NULL,
+    expires TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS passkey_proofs (
+    session TEXT NOT NULL, action TEXT NOT NULL, expires TEXT NOT NULL, PRIMARY KEY (session, action));
+CREATE TABLE IF NOT EXISTS passkey_resets (account TEXT PRIMARY KEY, due TEXT NOT NULL);
 """
 
 SITE_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{2,62}$")
@@ -101,6 +112,7 @@ class Platform:
         self._secret = (self.dir / "platform.key").read_bytes()
         self._mailer = mailer
         self._connections: Any = None
+        self._passkeys: Any = None
 
     # ------------------------------------------------------------ set-up
 
@@ -148,6 +160,13 @@ class Platform:
             from .oauth import Connections
             self._connections = Connections(self)
         return self._connections
+
+    @property
+    def passkeys(self) -> Any:
+        if self._passkeys is None:
+            from .passkeys import Passkeys
+            self._passkeys = Passkeys(self)
+        return self._passkeys
 
     @property
     def mailer(self) -> Any:
@@ -251,7 +270,13 @@ class Platform:
     # ------------------------------------------------------------ browser sessions
 
     def sign_in(self, email: str, code: Any) -> dict:
-        account = self._use_code(self.fingerprint(email), code)
+        return self.start_session(self._use_code(self.fingerprint(email), code))
+
+    def start_session(self, account: str) -> dict:
+        """A browser session for an account that has just proved itself, by emailed code or by passkey."""
+        suspended = self.store.one("SELECT suspended FROM accounts WHERE id=?", (account,))
+        if suspended is None or suspended["suspended"]:
+            raise SiteError("suspended", "This account cannot sign in.", status=403)
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(16)
         self.store.x("INSERT INTO sessions (id_hash, account, csrf, created, expires) VALUES (?,?,?,?,?)",
                      (_sha(token), account, csrf, self.now_z(), self._later(days=SESSION_DAYS)))
@@ -261,9 +286,9 @@ class Platform:
     def session(self, token: Optional[str]) -> Optional[dict]:
         if not token:
             return None
-        row = self.store.one("SELECT account, csrf FROM sessions WHERE id_hash=? AND expires > ?",
+        row = self.store.one("SELECT id_hash, account, csrf FROM sessions WHERE id_hash=? AND expires > ?",
                              (_sha(token), self.now_z()))
-        return {"account": row["account"], "csrf": row["csrf"]} if row else None
+        return {"id": row["id_hash"], "account": row["account"], "csrf": row["csrf"]} if row else None
 
     def sign_out(self, token: Optional[str]) -> None:
         if token:
@@ -307,11 +332,24 @@ class Platform:
             raise SiteError("already_confirmed", "This registration was already confirmed.",
                             "Return to your assistant.", status=409)
 
-    def confirm_registration(self, ticket_id: Any, code: Any) -> None:
+    def ticket_account(self, ticket_id: Any) -> Optional[str]:
+        """The existing account a registration is for, if its address already has one."""
+        found = self.store.one("SELECT id FROM accounts WHERE email_hash=?", (self._ticket(ticket_id)["email_hash"],))
+        return found["id"] if found else None
+
+    def confirm_registration(self, ticket_id: Any, code: Any, passkey: Optional[dict] = None) -> None:
         row = self._ticket(ticket_id)
         if row["confirmed"]:
             raise SiteError("already_confirmed", "This registration was already confirmed.",
                             "Return to your assistant.", status=409)
+        existing = self.ticket_account(ticket_id)
+        if existing and self.passkeys.has(existing):
+            # Confirming gives an assistant a key to the account, so the emailed code alone is not enough.
+            if not passkey or not passkey.get("credential"):
+                raise SiteError("needs_passkey", "This account has a passkey, so confirming needs it.",
+                                "Open the confirmation page in a browser that has your passkey.", status=403)
+            self.passkeys.confirm_for(existing, passkey.get("challenge"), passkey["credential"],
+                                      "ticket:" + row["id"])
         account = self._use_code(row["email_hash"], code, row["id"])
         self.store.x("UPDATE tickets SET confirmed=?, account=? WHERE id=?", (self.now_z(), account, row["id"]))
 

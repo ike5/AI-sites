@@ -19,7 +19,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "httpx>=0.27"]
+passkeys = ["webauthn>=2,<3"]
+dev = ["pytest>=8", "httpx>=0.27", "webauthn>=2,<3"]
 
 [project.scripts]
 aisites = "aisites.cli:main"
