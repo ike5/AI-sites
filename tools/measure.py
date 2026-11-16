@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from aisites import ops  # noqa: E402
 from aisites.api import create_app  # noqa: E402
-from aisites.mcp_door import tools_for  # noqa: E402
+from aisites.mcp_door import OTHER, tools_for  # noqa: E402
 from examples import game_catalogue, pharmacy, school  # noqa: E402
 
 BASE = "https://site.example"
@@ -125,13 +125,21 @@ def measure():
     games.set_role("pricing", [{"target": "games", "ops": ["get", "list", "change", "schedule"], "fields": ["price"]}])
     key = games.resolve(games.issue_key("pricing")["secret"])
 
-    def tools(principal):
-        chosen = tools_for(games, principal)
-        return {"tools": len(chosen), "bytes": len(json.dumps([
-            {"name": o.name, "description": o.summary, "inputSchema": o.schema()} for o in chosen]))}
+    def tools(site, principal):
+        chosen = [{"name": o.name, "description": o.summary, "inputSchema": o.schema()}
+                  for o in tools_for(site, principal)]
+        if principal.kind != "role" and len(chosen) < len(ops.OPS):
+            chosen.append({"name": OTHER.name, "description": OTHER.description, "inputSchema": OTHER.input_schema})
+        return {"tools": len(chosen), "bytes": len(json.dumps(chosen))}
 
-    results["mcp tool list"] = {"before (everyone)": {"tools": 34, "bytes": OLD_TOOL_LIST},
-                                "owner now": tools(ops.LOCAL), "a pricing role now": tools(key)}
+    role = tools(games, key)   # measured before the role exists for the owner's own count below
+    results["mcp tool list"] = {
+        "before (everyone, every operation)": {"tools": 34, "bytes": OLD_TOOL_LIST},
+        "every operation now": {"tools": len(ops.OPS), "bytes": len(json.dumps([
+            {"name": o.name, "description": o.summary, "inputSchema": o.schema()} for o in ops.OPS.values()]))},
+        "owner of the pharmacy site (hours, no bookings, forms, trees or roles)": tools(sites["pharmacy"], ops.LOCAL),
+        "owner of the game catalogue (a tree and a role)": tools(games, ops.LOCAL),
+        "a pricing role": role}
     results["describe the whole site (pharmacy)"] = {
         "full": len(json.dumps(sites["pharmacy"].describe(full=True))),
         "short (the default now)": len(json.dumps(sites["pharmacy"].describe()))}

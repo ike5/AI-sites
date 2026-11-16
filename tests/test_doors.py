@@ -54,7 +54,9 @@ def via_admin(site, key, op, args):
 def via_mcp(site, key, op, args):
     is_error, result = mcp_call(site, op, args)
     assert not is_error, result
-    return result
+    # A note for a connected assistant about its own tool list; not part of the operation's answer.
+    return {k: v for k, v in result.items() if k not in ("tools_added", "tools_note")} \
+        if isinstance(result, dict) else result
 
 
 def cli_argv(op, args):
@@ -137,7 +139,7 @@ def test_all_four_doors_leave_identical_sites(tmp_path, clock):
 def test_mcp_tools_mirror_the_operation_table(site):
     from aisites import ops
     tools = {t.name: t for t in mcp_tools(site)}
-    assert set(tools) == set(ops.OPS)
+    assert set(tools) <= set(ops.OPS) | {"other"} and {"define", "add", "list", "ask"} <= set(tools)
     assert tools["schedule"].input_schema["required"] == ["target", "key", "set"]
     is_error, result = mcp_call(site, "get", {"target": "nothing", "key": "x"})
     assert is_error and result["error"]["code"] == "not_found" and "define" in result["error"]["hint"]

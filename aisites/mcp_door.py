@@ -23,16 +23,83 @@ INSTRUCTIONS = (
     "Create structures with `define` (a built-in kind where one fits), then use `add`, `change`, `remove` on "
     "records, `schedule` for changes that start or revert on a date, and `confirm` when information is still "
     "true. `ask` shows what a visitor is told; `question` adds a question of your own. Every tool returns the "
-    "new state. Errors carry a `hint` saying what to do instead."
+    "new state. Errors carry a `hint` saying what to do instead. Tools for bookings, message forms, trees, "
+    "opening hours and staff roles are listed once the site uses them; before that, reach them with `other`."
 )
 
 
+# Tools that only make sense once a site uses a feature. Until then they are left out of the owner's list,
+# which is read in full by an assistant before it does anything, and reached through `other` instead.
+FEATURES = {
+    "booking": ("reserve", "book", "release", "booking", "bookings"),
+    "form": ("submit", "ticket", "inbox", "read_message", "reply"),
+    "tree": ("move",),
+    "hours": ("hours",),
+    "roles": ("drop_role", "issue_key", "revoke_key", "list_keys"),
+}
+OTHER = types.Tool(
+    name="other",
+    description="Run an operation that is not listed as a tool because this site does not use its feature yet "
+                "(bookings, message forms, trees, opening hours, staff roles). With no name, lists them with "
+                "their arguments.",
+    input_schema={"type": "object", "additionalProperties": False, "properties": {
+        "name": {"type": "string", "description": "The operation to run. Omit to list what is available."},
+        "arguments": {"type": "object", "description": "Its arguments."}}})
+
+
+def features_in_use(site: Site) -> set:
+    defs = list(site._defs().values())
+    used = {name for name in ("booking",) if any(name in d.settings for d in defs)}
+    if any(d.type == "form" for d in defs):
+        used.add("form")
+    if any(d.type == "tree" for d in defs):
+        used.add("tree")
+    if any(d.kind == "Hours" for d in defs):
+        used.add("hours")
+    if site.store.one("SELECT 1 FROM roles LIMIT 1"):
+        used.add("roles")
+    return used
+
+
+def hidden_for(site: Site, principal: ops.Principal) -> list:
+    """Operations the owner can use but is not shown as tools, because the site has no use for them yet."""
+    if principal.kind == "role":
+        return []
+    used = features_in_use(site)
+    return [ops.OPS[name] for feature, names in FEATURES.items() if feature not in used
+            for name in names if name in ops.OPS]
+
+
 def tools_for(site: Site, principal: ops.Principal) -> list:
-    """The operations this caller can use. The owner has all; a role has the ones its grants name."""
-    if principal.kind != "role":
-        return list(ops.OPS.values())
-    granted = {name for g in site.role_grants(principal.role, principal.id) for name in g["ops"]} | {"describe"}
-    return [op for op in ops.OPS.values() if op.name in granted]
+    """The operations shown to this caller as tools.
+
+    A role is shown the ones its grants name. The owner is shown everything the site has a use for. This
+    is about how much an assistant must read, not about permission: every call is checked either way.
+    """
+    if principal.kind == "role":
+        granted = {name for g in site.role_grants(principal.role, principal.id) for name in g["ops"]} | {"describe"}
+        return [op for op in ops.OPS.values() if op.name in granted]
+    hidden = {op.name for op in hidden_for(site, principal)}
+    return [op for op in ops.OPS.values() if op.name not in hidden]
+
+
+def _call(site: Site, principal: ops.Principal, name: str, arguments: dict) -> Any:
+    if name == OTHER.name and name not in ops.OPS:
+        wanted = arguments.get("name")
+        if not wanted:
+            return {"operations": [{"name": op.name, "summary": op.summary, "arguments": op.schema()}
+                                   for op in hidden_for(site, principal)],
+                    "use": "Call `other` with name and arguments. Once the site uses a feature, its tools are "
+                           "listed the next time you connect."}
+        name, arguments = str(wanted), dict(arguments.get("arguments") or {})
+    before = features_in_use(site) if principal.kind != "role" else set()
+    result = ops.run(site, principal, name, arguments)
+    if principal.kind != "role" and isinstance(result, dict):
+        added = [n for feature in sorted(features_in_use(site) - before) for n in FEATURES[feature]]
+        if added:  # said here because a connected assistant does not see its tool list change
+            result = {**result, "tools_added": added,
+                      "tools_note": "Listed as tools the next time you connect. Until then, run them with `other`."}
+    return result
 
 
 def build_server(site: Site, principal: ops.Principal = ops.LOCAL) -> Server:
@@ -40,13 +107,14 @@ def build_server(site: Site, principal: ops.Principal = ops.LOCAL) -> Server:
 
     async def list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
         allowed = await anyio.to_thread.run_sync(tools_for, site, principal)
+        more = [OTHER] if len(allowed) < len(ops.OPS) and principal.kind != "role" else []
         return types.ListToolsResult(tools=[
-            types.Tool(name=op.name, description=op.summary, input_schema=op.schema()) for op in allowed])
+            types.Tool(name=op.name, description=op.summary, input_schema=op.schema()) for op in allowed] + more)
 
     async def call_tool(ctx: Any, params: types.CallToolRequestParams) -> types.CallToolResult:
         try:
             result = await anyio.to_thread.run_sync(
-                ops.run, site, principal, params.name, dict(params.arguments or {}))
+                _call, site, principal, params.name, dict(params.arguments or {}))
         except SiteError as e:
             return types.CallToolResult(
                 content=[types.TextContent(type="text", text=json.dumps(e.as_dict()))], is_error=True)
