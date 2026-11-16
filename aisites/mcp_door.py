@@ -36,11 +36,12 @@ FEATURES = {
     "tree": ("move",),
     "hours": ("hours",),
     "roles": ("drop_role", "issue_key", "revoke_key", "list_keys"),
+    "contacts": ("set_contacts", "contacts", "contact", "invite"),
 }
 OTHER = types.Tool(
     name="other",
     description="Run an operation that is not listed as a tool because this site does not use its feature yet "
-                "(bookings, message forms, trees, opening hours, staff roles). With no name, lists them with "
+                "(bookings, message forms, trees, opening hours, staff roles, contacts). With no name, lists them with "
                 "their arguments.",
     input_schema={"type": "object", "additionalProperties": False, "properties": {
         "name": {"type": "string", "description": "The operation to run. Omit to list what is available."},
@@ -58,6 +59,8 @@ def features_in_use(site: Site) -> set:
         used.add("hours")
     if site.store.one("SELECT 1 FROM roles LIMIT 1"):
         used.add("roles")
+    if site.contact_settings["requests"] != "off" or site.store.one("SELECT 1 FROM contacts LIMIT 1"):
+        used.add("contacts")
     return used
 
 
@@ -77,7 +80,7 @@ def tools_for(site: Site, principal: ops.Principal) -> list:
     is about how much an assistant must read, not about permission: every call is checked either way.
     """
     if principal.kind == "role":
-        granted = {name for g in site.role_grants(principal.role, principal.id) for name in g["ops"]} | {"describe"}
+        granted = {name for g in site.grants_of(principal) for name in g["ops"]} | {"describe"}
         return [op for op in ops.OPS.values() if op.name in granted]
     hidden = {op.name for op in hidden_for(site, principal)}
     return [op for op in ops.OPS.values() if op.name not in hidden]

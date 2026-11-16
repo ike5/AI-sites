@@ -271,10 +271,10 @@ def create_app(site: Site) -> FastAPI:
 
     # Feature modules add their own routes; `ctx` hands them the helpers above.
     from types import SimpleNamespace
-    from . import actions, bookings, forms, stream
+    from . import actions, bookings, forms, identity, stream
     ctx = SimpleNamespace(prefix=prefix, base=base, token=token, principal=principal, is_owner=is_owner,
                           headers=headers, reply=reply)
-    for feature in (stream, actions, bookings, forms, questions):
+    for feature in (stream, actions, bookings, forms, questions, identity):
         feature.routes(app, site, ctx)
 
     from .mcp_door import McpHttp

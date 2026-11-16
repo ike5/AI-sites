@@ -179,8 +179,9 @@ def check_setting(site: Any, sdef: schema.StructureDef, value: Any) -> dict:
         raise _bad(f"unknown entries: {', '.join(unknown)}.", "It takes: " + ", ".join(SETTING_KEYS[:-1]) + ".")
     if value.get("open"):
         raise _bad("a form cannot be opened to callers without a key yet.",
-                   "Issue keys to senders: a role granted `submit` and `ticket` on this form. Opening forms to "
-                   "everyone arrives with key-based identity in Milestone 4. Remove `open`.")
+                   "Grant `submit` and `ticket` on this form to a role, then give senders a key for that role "
+                   "or make them contacts (`set_contacts`): a stranger asks to be a contact, you approve, and "
+                   "they can write. Remove `open`.")
     out: dict = {}
     if "purposes" in value:
         p = value["purposes"]
@@ -486,7 +487,7 @@ def _may_see(site: Any, sdef: schema.StructureDef, reader: Optional[ops.Principa
     """A key may see a non-public form when its role has any grant on it (a sender needs the form)."""
     if reader is None or reader.kind != "role":
         return False
-    return any(g["target"] in (sdef.name, "*") for g in site.role_grants(reader.role, reader.id))
+    return any(g["target"] in (sdef.name, "*") for g in site.grants_of(reader))
 
 
 def routes(app: Any, site: Any, ctx: Any) -> None:

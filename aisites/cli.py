@@ -146,7 +146,7 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
         print(__doc__, file=out)
         print("Operations: " + ", ".join(ops.OPS), file=out)
         print("Other commands: site create, site key, templates, host init, serve, mcp, ops, guide, verify, "
-              "anchors", file=out)
+              "anchors, identity", file=out)
         return 0
     command, rest = argv[0], argv[1:]
     try:
@@ -181,6 +181,8 @@ def main(argv: Optional[list] = None, clock: Optional[Callable] = None, out: Any
             return _anchors(rest, clock, out)
         if command == "host":
             return _host(rest, clock, out)
+        if command == "identity":
+            return _identity(rest, out)
         if command == "templates":
             from . import templates
             _emit({"templates": templates.describe()}, out)
@@ -276,6 +278,59 @@ def _anchors(argv: list, clock: Optional[Callable], out: Any) -> int:
         _emit({"anchors": site.anchor_config()}, out)
     finally:
         site.close()
+    return 0
+
+
+# ------------------------------------------------------------ an assistant's identity on someone else's site
+
+def _identity(argv: list, out: Any) -> int:
+    from . import identity_client as client
+
+    p = argparse.ArgumentParser(prog="aisites identity",
+                                description="Act for one person on someone else's site: make a key, ask the "
+                                            "site to know it, and get a token once approved.")
+    sub = p.add_subparsers(dest="action", required=True)
+    n = sub.add_parser("new", help="make a key for one site and save it to a file")
+    n.add_argument("keyfile")
+    a = sub.add_parser("ask", help="ask a site to know this key")
+    a.add_argument("site_url")
+    a.add_argument("--key", required=True, metavar="KEYFILE")
+    a.add_argument("--name", required=True, help="a short name the owner will see")
+    a.add_argument("--purpose", help="one of the purposes the site lists at /identity")
+    a.add_argument("--invitation", help="an invitation code from the site owner")
+    a.add_argument("--email", help="an address for replacing a lost key, on sites that can send mail")
+    s = sub.add_parser("status", help="pending, approved or blocked")
+    s.add_argument("site_url")
+    s.add_argument("contact")
+    t = sub.add_parser("token", help="sign a permission statement and get a token good for an hour")
+    t.add_argument("site_url")
+    t.add_argument("--key", required=True, metavar="KEYFILE")
+    t.add_argument("--contact", required=True)
+    t.add_argument("--may", help='fewer permissions than the role has, as JSON: [{"target": ..., "ops": [...]}]')
+    t.add_argument("--hours", type=float, default=1)
+    ns = p.parse_args(argv)
+    if ns.action == "new":
+        if os.path.exists(ns.keyfile):
+            raise SiteError("exists", f"'{ns.keyfile}' already exists.", "Choose another file; a key is not replaced.")
+        key = client.new_key()
+        with open(os.open(ns.keyfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as f:
+            f.write(key + "\n")
+        _emit({"saved": ns.keyfile, "public_key": client.public_of(key),
+               "note": "Use this key for one site only, and keep the file private."}, out)
+        return 0
+    if ns.action == "status":
+        _emit(client.Contact(ns.site_url, client.new_key()).status(ns.contact), out)
+        return 0
+    with open(ns.key) as f:
+        me = client.Contact(ns.site_url, f.read().strip())
+    if ns.action == "ask":
+        _emit(me.ask(ns.name, ns.purpose, ns.invitation, ns.email), out)
+    else:
+        try:
+            may = json.loads(ns.may) if ns.may else None
+        except ValueError:
+            raise SiteError("invalid", "--may is not valid JSON.")
+        _emit(me.token(ns.contact, may, ns.hours), out)
     return 0
 
 

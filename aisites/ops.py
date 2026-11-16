@@ -21,13 +21,15 @@ ROLE_OPS = ("add", "get", "list", "change", "remove", "move", "schedule", "unsch
 class Principal:
     """Who is calling: kind "owner", "role" or "anonymous".
 
-    `id` is what the audit trail records: "owner", "local" (a door working on the site folder directly)
-    or a role key's id. `role` is the role name of a role key. Grants are not carried here but read on
-    each call, so a changed role or a revoked key applies at once.
+    `id` is what the audit trail records: "owner", "local" (a door working on the site folder directly),
+    a role key's id, or a contact's id. `role` is the role name of a role key or contact. Grants are not
+    carried here but read on each call, so a changed role or a revoked key applies at once. `token` names
+    the token a contact is acting through, which may allow less than the contact's role does.
     """
     kind: str = "anonymous"
     id: str = ""
     role: str = ""
+    token: str = ""
 
 
 OWNER = Principal("owner", "owner")
@@ -281,6 +283,10 @@ def _run(site: Site, principal: Principal, spec: Op, args: Optional[dict]) -> An
     if principal.kind != "role":
         return spec.fn(site, **args)
     hidden = _check_role(site, principal, op, args)
+    from . import identity
+    if identity.is_contact(principal):
+        hidden = identity.outsider(site, principal, op, args, hidden)
+        args = identity.own_only(site, principal, op, args)
     with site.viewing(args.get("target"), hidden):
         result = spec.fn(site, **args)
     return _hide(op, result, hidden)
@@ -303,7 +309,7 @@ def _summary(grants: list) -> str:
 
 def _check_role(site: Site, principal: Principal, op: str, args: dict) -> set:
     """Refuse what the role's grants do not allow. Returns the private fields it may not see."""
-    grants = site.role_grants(principal.role, principal.id)
+    grants = site.grants_of(principal)
     who = f"Role '{principal.role}'"
     target = args.get("target")
     if op != "describe" and op not in ROLE_OPS and not (OPS[op].visitor or OPS[op].grantable):

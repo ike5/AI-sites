@@ -33,6 +33,7 @@ from .actions import ActionsMixin
 from .bookings import BookingsMixin
 from .checkpoints import CheckpointMixin
 from .forms import FormsMixin
+from .identity import IdentityMixin
 from .questions import QuestionsMixin
 from .redaction import RedactionMixin
 
@@ -43,7 +44,7 @@ CONFIG_FIELDS = ("name", "description", "timezone", "language", "currency", "url
 
 
 class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsMixin, FormsMixin,
-           QuestionsMixin):
+           QuestionsMixin, IdentityMixin):
     def __init__(self, directory: Any, clock: Optional[Callable[[], datetime]] = None,
                  anchors: Optional[list] = None):
         self.dir = Path(directory)
@@ -170,7 +171,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
         if reader is None or reader.kind != "role":
             return False
         return any(g["target"] in (target, "*") and op in g["ops"]
-                   for g in self.role_grants(reader.role, reader.id))
+                   for g in self.grants_of(reader))
 
     def _reader_keyed(self) -> bool:
         return getattr(getattr(self._viewer, "reader", None), "kind", "") == "role"
@@ -252,6 +253,9 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
 
     def _save_def(self, sdef: StructureDef, before: Optional[dict] = None) -> None:
         """Store a definition. `before` is its public form prior to the change, if it had one."""
+        if "owned" in sdef.settings and sdef.access != "private":
+            raise SiteError("bad_setting", f"'{sdef.name}' holds records that belong to contacts, so it must "
+                            "stay private.", "Remove the `owned` setting first, or keep access private.")
         self.store.x("INSERT INTO structures (name, def) VALUES (?, ?) "
                      "ON CONFLICT(name) DO UPDATE SET def=excluded.def",
                      (sdef.name, json.dumps(sdef.dump(), sort_keys=True)))

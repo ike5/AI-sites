@@ -58,6 +58,21 @@ CREATE TABLE IF NOT EXISTS idempotency (
     caller TEXT NOT NULL, scope TEXT NOT NULL, idem_key TEXT NOT NULL, request_hash TEXT NOT NULL,
     response TEXT NOT NULL, created TEXT NOT NULL, PRIMARY KEY (caller, scope, idem_key));
 CREATE TABLE IF NOT EXISTS questions (id TEXT PRIMARY KEY, def TEXT NOT NULL);
+
+-- Visitor identity (identity.py): people a site knows by a public key, and what lets them act.
+CREATE TABLE IF NOT EXISTS contacts (
+    id TEXT PRIMARY KEY, public_key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, purpose TEXT, status TEXT NOT NULL,
+    role TEXT NOT NULL, email_hash TEXT, created TEXT NOT NULL, decided TEXT);
+CREATE TABLE IF NOT EXISTS invitations (
+    code_hash TEXT PRIMARY KEY, role TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', created TEXT NOT NULL,
+    expires TEXT NOT NULL, used TEXT);
+CREATE TABLE IF NOT EXISTS contact_tokens (
+    hash TEXT PRIMARY KEY, contact TEXT NOT NULL, may TEXT, expires TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS contact_nonces (
+    contact TEXT NOT NULL, nonce TEXT NOT NULL, expires TEXT NOT NULL, PRIMARY KEY (contact, nonce));
+CREATE TABLE IF NOT EXISTS contact_recoveries (
+    contact TEXT NOT NULL, code_hash TEXT NOT NULL, public_key TEXT NOT NULL, created TEXT NOT NULL,
+    expires TEXT NOT NULL, attempts INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS usage (
     caller TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (caller, day));
 CREATE TABLE IF NOT EXISTS bookings (

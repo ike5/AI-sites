@@ -40,6 +40,9 @@ class AccessMixin:
         row = self.store.one("SELECT id, role FROM keys WHERE hash=? AND revoked IS NULL", (_hash_key(token),))
         if row:
             return Principal("role", row["id"], row["role"])
+        contact = self.resolve_contact(token)
+        if contact is not None:
+            return contact
         return self.token_resolver(token) if self.token_resolver else None
 
     def _grant_choices(self) -> str:

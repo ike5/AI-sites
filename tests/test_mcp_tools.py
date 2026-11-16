@@ -36,6 +36,7 @@ def test_a_plain_site_is_shown_only_what_it_can_use(site):
     ("tree", lambda s: s.define("menu", type="tree")),
     ("hours", lambda s: s.define("hours", kind="Hours")),
     ("roles", lambda s: s.set_role("staff", [{"target": "*", "ops": ["list"]}])),
+    ("contacts", lambda s: s.set_contacts(requests="invite")),
 ])
 def test_each_feature_brings_its_own_tools(site, feature, turn_on):
     before = names(site)
@@ -50,6 +51,7 @@ def test_a_site_using_everything_lists_everything_and_needs_no_other(site):
     site.define("menu", type="tree")
     site.define("hours", kind="Hours")
     site.set_role("staff", [{"target": "*", "ops": ["list"]}])
+    site.set_contacts(requests="open")
     assert {t.name for t in mcp_tools(site)} == set(ops.OPS)
 
 

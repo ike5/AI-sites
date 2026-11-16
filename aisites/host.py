@@ -56,6 +56,9 @@ class Host:
                 if platform is not None:
                     # Tokens from the host's sign-in flow for assistants count on this site.
                     site.token_resolver = lambda token, n=name: platform.connections.principal_for(token, n)
+                    # A site holds no addresses and no mail settings; the host lends it both.
+                    site.mail = lambda to, subject, text: platform.mailer.send(to, subject, text)
+                    site.email_fingerprint = platform.fingerprint
                 self._apps[name] = create_app(site)
             return self._apps[name]
 

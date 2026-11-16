@@ -51,7 +51,7 @@ def test_setting_validation(site):
         assert needle in e.value.message + e.value.hint, e.value.message
         return e.value
 
-    e = refused({"open": True}, needle="Milestone 4")
+    e = refused({"open": True}, needle="contacts")
     assert "key" in e.hint
     refused({"text_field": "message"}, fields + ["notes:text"], "only one free-text field")
     refused({}, fields, "free text")  # a text field must be named as the text field

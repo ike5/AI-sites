@@ -421,6 +421,8 @@ def front(site: Any, owner: bool = False, base: str = "") -> dict:
         out["do"] = f"{base}/actions"
     out["more"] = {"find": f"{base}/find?q=", "map": f"{base}/map", "changes": f"{base}/changes",
                    "history": f"{base}/history"}
+    if site.contact_settings["requests"] != "off":
+        out["more"]["identity"] = f"{base}/identity"   # how an assistant becomes a known contact here
     out["first_published"] = site.first_published()
     out["as_of"] = site.now_z()
     return out
