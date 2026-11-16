@@ -94,7 +94,9 @@ CODES_PER_EMAIL_PER_HOUR = 5
 CODES_PER_ADDRESS_PER_HOUR = 20
 DEFAULTS = {"name": "AI-sites host", "public_url": "", "sites_per_account": 3, "mail": {},
             # Let an assistant identify itself by the address of a document it publishes (fetched by this host).
-            "client_metadata_urls": True}
+            "client_metadata_urls": True,
+            # Let one question be put to every site here at once (host_ask.py).
+            "ask_across_sites": True}
 
 
 def _sha(text: str) -> str:

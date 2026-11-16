@@ -77,14 +77,82 @@ To connect an AI to a new site, add the site's `mcp` address as a connector and 
 the site's `admin` address, which lists every operation, and call `POST /admin/{target}/{op}` with the same
 header.
 
+## One question across every site
+
+A host answers one question for every site it serves: `GET /ask/Offer?q=ibuprofen` returns the matching
+offers from each site in one request, and `GET /find?q=words` searches them all. `GET /` lists the kinds
+that can be asked. Each site is asked as a visitor would ask it. The details are in
+[`docs/standard.md`](standard.md#across-a-host).
+
+- A site's owner can leave their site out: `aisites configure listed=false`.
+- Suspended sites are left out.
+- To switch it off for the whole host, set `"ask_across_sites": false` in `platform.json` in the sites folder
+  and restart.
+- Each site is read in turn, 50 per request. This suits tens of sites.
+
+## Passkeys
+
+A passkey lets a person sign in to the account page without an emailed code. The sign-in page has a "Sign in with a
+passkey" button, and no email address is typed. The emailed code still works as a way in.
+
+Because email stays a way in, an account that has a passkey needs it for everything that hands out control. Signed in
+by email alone, these are refused with 403 `needs_passkey`:
+
+- approving an assistant on the consent page (Deny never needs a passkey)
+- issuing an account key
+- issuing a new owner key for a site
+- adding or removing a passkey
+- confirming an AI-started sign-up. The confirmation page then asks for the passkey as well as the emailed code
+
+Signed in by email alone, a person can still see the account, create a site, revoke keys, disconnect assistants and
+sign out. The JSON API used with an account key, such as `POST /sites/{name}/key`, is not gated. An account key
+already gives that control.
+
+A passkey confirmation is for one named action, in one browser session. It is good for 2 minutes and one use.
+
+### Adding and removing
+
+On the account page, under "Passkeys", give a passkey a name and add it. An account may have at most 10. The list
+shows each passkey's name, when it was added, when it was last used, and a Remove button.
+
+### If you lose your passkey device
+
+Signed in by email, open "I have lost my passkey" on the account page, enter the account's email address, and ask
+for the passkeys to be removed. Removal happens 24 hours later. A notice is emailed at once. Using any passkey
+before then cancels the removal, and so does "Cancel the removal" on the account page. The address entered must
+be the account's own. The wait relies on email, so this path is only as strong as the person's mailbox.
+
+### What the host must have
+
+- The `webauthn` library, an optional extra: `pip install 'aisites[passkeys]'`.
+- The public address (`--public-url`) must be `https://` with no path. `http://localhost:<port>` and
+  `http://127.0.0.1:<port>` also work, for trying it out. This is the same condition as the sign-in flow for
+  assistants.
+- If either is missing, passkeys are off. The account page says why, and everything else works as before.
+- Passkeys need JavaScript in the browser. The account pages that offer a passkey include one small inline script,
+  allowed by a per-page nonce in the `Content-Security-Policy` header. Other pages send `script-src 'none'`. The
+  emailed code is the path that works without scripts.
+
+### How passkeys are kept
+
+- Only the public half of a passkey is stored.
+- A passkey belongs to the host's public address. Changing `--public-url` makes existing passkeys unusable. People
+  sign in by email and add them again.
+- Passkey sign-in challenges are limited to 60 an hour per network address. A challenge lasts 5 minutes and is good
+  for one answer.
+- Tested with a software passkey device in the test suite, and with Chromium's built-in virtual passkey device
+  against a local server (add, sign out, sign in with it, issue a key, approve an assistant). Not tested with real
+  phones or security keys.
+
 ## Connecting an assistant that uses a sign-in flow
 
 Some assistants, ChatGPT on the web for example, cannot send a key in a header. They connect through a standard
 sign-in flow instead (OAuth 2.1, as the Model Context Protocol specifies it).
 
 The person gives the assistant only the site's MCP address: `https://<host>/s/<name>/mcp`. The assistant sends
-the person to the host. The person signs in with their emailed code and sees a page that names the assistant,
-where it will return to, and the site. They press Allow or Deny.
+the person to the host. The person signs in with their emailed code (or a passkey) and sees a page that names the
+assistant, where it will return to, and the site. They press Allow or Deny. If the account has a passkey, pressing
+Allow asks for it.
 
 Allow gives that assistant full control of that one site, the same power as the site's owner key. It gets no
 access to the person's other sites or their account. If the assistant names no site, the person chooses one of
@@ -158,12 +226,18 @@ The host serves these at its root, beside the sites at `/s/<name>/`.
 | `GET /` | What this host is and how to register, as JSON |
 | `GET /llms.txt` | The same, as Markdown |
 | `GET /templates` | The templates, with descriptions |
-| `GET /account` | For people: sign in; then list your sites, create one, issue a new owner key for a site, issue or revoke account keys, disconnect connected assistants, sign out |
+| `GET /account` | For people: sign in; then list your sites, create one, issue a new owner key for a site, issue or revoke account keys, disconnect connected assistants, add or remove passkeys, sign out |
 | `POST /signup` | For an AI: starts sign-up with `{"email": "..."}`. The answer has `ticket`, `claim`, `expires`, `confirm_at`, `collect_at`, `tell_the_person`, and `next` |
 | `GET /account/confirm?ticket=...` | For the person: takes the emailed code |
 | `GET /signup/{ticket}` | For the AI, with `Authorization: Bearer <claim>`: 202 `pending`, then 200 with `account_key` (starts `ais_acct_`), once |
 | `GET /sites`, `POST /sites` | With `Authorization: Bearer <account key>`: list your sites; create one |
 | `POST /sites/{name}/key` | With an account key: issue a new owner key for one of your sites. The old one stops working |
+| `POST /account/passkey/options`, `POST /account/passkey/session` | Starts a sign-in with a passkey, then finishes it and starts a session |
+| `POST /account/passkey/confirm/options`, `POST /account/passkey/confirm` | Presents a passkey for one named action, such as approving an assistant |
+| `POST /account/passkeys/options`, `POST /account/passkeys` | Adds a passkey |
+| `POST /account/passkeys/{id}/remove` | Removes one passkey |
+| `POST /account/passkeys/reset`, `POST /account/passkeys/reset/cancel` | Starts the lost-device removal of passkeys, or cancels it |
+| `POST /account/confirm/options` | The passkey step on the confirmation page for an AI-started sign-up |
 
 `POST /sites` takes `name`, `template`, `title`, `timezone`, `language`, `currency` and `description`. It answers
 201 with the site's addresses (`site`, `manifest`, `mcp`, `admin`), the structures it created, and its
@@ -240,6 +314,7 @@ Files in the sites folder:
 - The sign-in flow needs the host to be reachable over HTTPS at its public address.
 - A connected assistant has the same power over that site as the owner key, until it is disconnected. There is
   not yet a way to connect an assistant with a limited role.
-- Sign-in is still an emailed code. Passkeys are the next step; Google or Apple sign-in is planned after that.
+- Passkeys exist (see [Passkeys](#passkeys)). They belong to the host's public address, and the lost-device path
+  relies on email. Google or Apple sign-in is not built.
 - Not built: a built-in assistant; billing and plans; custom domain and TLS set-up (the existing `hosts.json`
   mapping still applies); sign-in for visitors in a browser.

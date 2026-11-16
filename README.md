@@ -102,6 +102,14 @@ resulting sites to be identical.
 For an AI editing a site: `aisites mcp <folder>` serves the tools over stdio; a served site exposes them
 at `/mcp` with the owner key or a role key as a bearer token. `GET /admin/ops` describes every operation.
 
+The owner's MCP tool list is kept short. Tools for bookings, message forms, trees, opening hours and staff roles
+are listed once the site uses them. Until then, `other` lists them and runs them, and a call that switches a
+feature on says so in `tools_added`. A connected assistant sees new tools the next time it connects. Hiding is
+about how much an assistant reads, not permission: every call is still checked. Measured with
+`python tools/measure.py`: all 37 operations are about 19 KB (about 4,700 tokens). The owner of the pharmacy
+example is shown 23 tools, about 13.4 KB (about 3,400 tokens). A pricing role in the game catalogue example is
+shown 5 tools, about 3.8 KB.
+
 ### Shared meaning
 
 Built-in kinds give fields the same meaning on every site, following schema.org, so an agent can compare
@@ -379,6 +387,10 @@ assistant that uses a sign-in flow needs only the site's `mcp` address. Use
 `--mail-file` for development; real mail needs the `--smtp-*` options. The details are in
 [`docs/hosting.md`](docs/hosting.md).
 
+An account can also sign in with a passkey instead of an emailed code. Once an account has a passkey, approving an
+assistant or issuing a key also needs it, so the emailed code alone cannot hand out control. A passkey needs the
+`webauthn` extra and an `https://` public address. See [Passkeys](docs/hosting.md#passkeys).
+
 ## Limits you should know about
 
 - The signature proves who published the history, not that its dates are true. Independent timestamping
@@ -416,10 +428,11 @@ assistant that uses a sign-in flow needs only the site's `mcp` address. Use
 
 ### Hosted service
 
-- Done: sign-up by email, templates, account keys, owner-key recovery, suspension, and the sign-in flow for
-  assistants that cannot send a key in a header ([`docs/hosting.md`](docs/hosting.md)).
-- Next: passkeys for signing in to the account page.
-- Later: billing, custom domains, a built-in assistant.
+- Done: sign-up by email, templates, account keys, owner-key recovery, suspension, the sign-in flow for
+  assistants that cannot send a key in a header, and passkeys for signing in to the account page and for
+  approving sensitive actions ([`docs/hosting.md`](docs/hosting.md)).
+- Next: one question across every site on a host; visitor identity.
+- Later: Google or Apple sign-in, billing, custom domains, a built-in assistant.
 
 [`docs/scenarios.md`](docs/scenarios.md) maps each target scenario to a milestone.
 

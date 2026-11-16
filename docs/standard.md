@@ -182,6 +182,27 @@ its fields and where each reference leads, and `GET /collections/{name}` takes t
 
 `GET /find?q=words` returns up to 10 candidates across the whole site, for when it is unclear where to look.
 
+## Across a host
+
+A host that serves many sites answers one question for all of them. Built-in kinds mean the same on every
+site, so only kinds can be asked this way; each site's own question ids stay its own.
+
+| Address on the host | What it does |
+|---|---|
+| `GET /` | The host's first response. Its `ask` lists the kinds that can be asked, with how many sites answer each |
+| `GET /ask/Offer` | With nothing added: the sites that answer it, each a link to that site's own question |
+| `GET /ask/Offer?q=ibuprofen&stock.gt=0` | Every site's answer in one request: `{"question", "sites": [{"site", "name", "url", "answer"}], "asked"}` |
+| `GET /find?q=words` | A few matching records from each site |
+
+- Each site is asked exactly as a visitor would ask it, so nothing is shown that the site does not show itself.
+- Sites with nothing matching are left out. A site that cannot be asked that way (it has no such field, say)
+  is counted in `could_not_answer` and the rest still answer.
+- `links=0`, `format=table`, `max=` and `unless=` work as on a single site. At most 50 sites are asked per
+  request, with a `next` link to the following 50.
+- A site's owner can leave it out with `aisites configure listed=false`. Suspended sites are always left out.
+  A host can switch the whole thing off (`ask_across_sites` in its settings).
+- A link-only assistant goes host, sites, a site's options, answer: four requests.
+
 ## What is never shown
 
 Attached records, word matching and questions all go through the same view as a direct read, for the same
@@ -227,5 +248,6 @@ estimated as bytes / 4.
 - Questions cover records of one structure, narrowed by their own and referenced fields, with linked records
   attached. Sums and averages are not covered.
 - Search and attaching scan records in memory. That suits small sites, not tens of thousands of records.
+- A question across a host asks each site in turn. That suits tens of sites, not thousands.
 - `format=table` shows fields of referenced records but not of records that refer back, which can be many.
 - The measurements count requests and bytes. They do not show whether a model answers correctly.

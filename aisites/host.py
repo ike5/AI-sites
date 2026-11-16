@@ -38,7 +38,7 @@ class Host:
             if self._platform is None and Platform.enabled(self.dir):
                 from .platform_web import create_platform_app
                 self._platform = Platform(self.dir, self.clock, self.mailer)
-                self._platform_app = create_platform_app(self._platform)
+                self._platform_app = create_platform_app(self._platform, self)
             return self._platform
 
     def names(self) -> list:

@@ -412,7 +412,7 @@ def front(site: Any, owner: bool = False, base: str = "") -> dict:
     """The first thing an assistant reads: what can be asked, in as few bytes as will do."""
     from .site import VERSION
     asks = listing(site, owner, base)
-    out = {"aisites": VERSION, "format": FORMAT, **{k: v for k, v in site.config.items() if v},
+    out = {"aisites": VERSION, "format": FORMAT, **{k: v for k, v in site.config.items() if v and k != "listed"},
            "ask": asks[:MAX_INLINE]}
     if len(asks) > MAX_INLINE:
         out["more_questions"] = f"{base}/ask"

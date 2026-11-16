@@ -3,6 +3,10 @@
 This is the whole model. It is the same through every door: Python, the command line, the admin web API
 and MCP. If you are an AI editing a site, call `describe` first.
 
+Through MCP the owner is shown only the tools the site uses. Tools for bookings, message forms, trees, opening
+hours and staff roles appear once the site has one of them. Until then, `other` lists them (with no `name`) and
+runs them (with `name` and `arguments`). Reconnect to see new tools.
+
 ## Four structures
 
 | Structure | What it is | Human equivalent |

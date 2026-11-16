@@ -39,7 +39,7 @@ from .redaction import RedactionMixin
 VERSION = "0.1"
 KEY_RE = re.compile(r"^[^\s/?#]+$")
 FILTER_OPS = ("eq", "ne", "gt", "gte", "lt", "lte")
-CONFIG_FIELDS = ("name", "description", "timezone", "language", "currency", "url")
+CONFIG_FIELDS = ("name", "description", "timezone", "language", "currency", "url", "listed")
 
 
 class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsMixin, FormsMixin,
@@ -128,6 +128,12 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
                             "Settings: " + ", ".join(CONFIG_FIELDS) + ".")
         if changes.get("timezone"):
             timeview.zone(changes["timezone"])
+        if changes.get("listed") is not None:
+            # Whether a host may include this site when one question is put to every site it serves.
+            said = str(changes["listed"]).lower()
+            if said not in ("true", "false"):
+                raise SiteError("invalid", "`listed` must be true or false.")
+            changes["listed"] = said == "true"
         with self.store.tx():
             config = self.config
             changed = {k: v for k, v in changes.items() if v is not None and config.get(k) != v}
@@ -1223,7 +1229,7 @@ class Site(RedactionMixin, CheckpointMixin, AccessMixin, ActionsMixin, BookingsM
             has_hours = has_hours or (d.kind == "Hours" and (owner or d.public))
             structures.append(item)
         out = {
-            "aisites": VERSION, **{k: v for k, v in config.items() if v},
+            "aisites": VERSION, **{k: v for k, v in config.items() if v and k != "listed"},
             "first_published": self.first_published(), "as_of": self.now_z(),
             "public_key": self.public_key, "structures": structures,
             "links": {"ask": f"{prefix}/ask", "find": f"{prefix}/find?q=", "actions": f"{prefix}/actions",

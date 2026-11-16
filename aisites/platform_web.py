@@ -17,10 +17,11 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 
-from . import html, templates
+from . import host_ask, html, templates
 from .errors import SiteError
 from .passkeys import RESET_HOURS
 from .platform import SESSION_DAYS, Platform
+from .reading import tag_of
 
 COOKIE = "aisites_session"
 NEXT = re.compile(r"^req_[A-Za-z0-9_-]{10,60}$")
@@ -142,7 +143,7 @@ def _page(platform: Platform, title: str, body: str, status: int = 200, script: 
                                                                 + (f"'nonce-{nonce}'" if script else "'none'")})
 
 
-def create_platform_app(platform: Platform) -> FastAPI:
+def create_platform_app(platform: Platform, host: Any = None) -> FastAPI:
     app = FastAPI(title=platform.config["name"], openapi_url=None, docs_url=None, redoc_url=None)
 
     # ------------------------------------------------------------ helpers
@@ -214,9 +215,19 @@ def create_platform_app(platform: Platform) -> FastAPI:
 
     # ------------------------------------------------------------ for AIs
 
+    def full(request: Request) -> str:
+        """This host's whole address, for links an assistant can open as they are."""
+        return (platform.config["public_url"] or str(request.base_url)).rstrip("/")
+
     @app.get("/")
     def describe(request: Request):
         payload = platform.describe()
+        across = host_ask.listing(host, full(request)) if host is not None else []
+        if across:
+            payload["ask"] = across
+            payload["asking"] = ("Open a url to see which sites answer it, or add words: " + full(request)
+                                 + "/ask/Offer?q=<words> asks every site at once. Each site also answers at "
+                                   "/s/<name>/ask.")
         fmt = request.query_params.get("format")
         if fmt == "html" or (fmt is None and "text/html" in request.headers.get("accept", "")):
             return HTMLResponse(html.render(payload, platform.config["name"], base(request)))
@@ -233,6 +244,24 @@ def create_platform_app(platform: Platform) -> FastAPI:
         lines += ["", f"Sites live at {d['sites_live_at']}. Each site describes itself at "
                       "/.well-known/aisite.json under its own address."]
         return PlainTextResponse("\n".join(lines) + "\n", media_type="text/markdown; charset=utf-8")
+
+    if host is not None:
+        @app.get("/ask")
+        def ask_list(request: Request):
+            return JSONResponse({"ask": host_ask.listing(host, full(request)),
+                                 "how": "Each id is a kind of thing that means the same on every site. Open its "
+                                        "url to see which sites answer it; add words or filters to ask them all.",
+                                 "as_of": platform.now_z()})
+
+        @app.get("/ask/{kind}")
+        def ask_across(request: Request, kind: str):
+            out = host_ask.ask(host, kind, dict(request.query_params), full(request))
+            return JSONResponse(out, headers={"ETag": tag_of(out), "Cache-Control": "no-cache"})
+
+        @app.get("/find")
+        def find_across(request: Request):
+            q = request.query_params
+            return JSONResponse(host_ask.find(host, q.get("q"), q.get("limit", 10), full(request)))
 
     @app.get("/templates")
     def list_templates():
